@@ -4,18 +4,9 @@ export const PROMO_MESSAGES = [
   { text: "Sell on CarmelMart — Join thousands of verified vendors",    icon: "🏪" },
 ];
 
-export const SEARCH_SUGGESTIONS = [
-  { label: "Nike Sneakers",       category: "Fashion"     },
-  { label: "iPhone 15 Pro",       category: "Electronics" },
-  { label: "Standing Desk",       category: "Home"        },
-  { label: "Face Serum",          category: "Beauty"      },
-  { label: "Gaming Chair",        category: "Home"        },
-  { label: "Wireless Earbuds",    category: "Electronics" },
-  { label: "African Print Dress", category: "Fashion"     },
-  { label: "Protein Supplement",  category: "Sports"      },
-  { label: "Laptop Backpack",     category: "Electronics" },
-  { label: "Skincare Bundle",     category: "Beauty"      },
-];
+// SEARCH_SUGGESTIONS was removed: it was a hardcoded list whose every entry
+// returned zero results against this catalogue. Trending chips now come from
+// lib/useTrendingSearches.js, derived from live product names.
 
 export const NIGERIAN_STATES = [
   "Lagos", "Abuja (FCT)", "Rivers", "Kano", "Oyo", "Delta",

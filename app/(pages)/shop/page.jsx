@@ -1101,6 +1101,28 @@ function ShopContent() {
     });
   }, []);
 
+  // The search box is uncontrolled by `filters` while the shopper is typing.
+  // Committing on every keystroke fired a request (and a router.replace) per
+  // character. Debounced at 280ms, matching the navbar's autocomplete.
+  const [searchDraft, setSearchDraft] = useState(filters.search);
+
+  // External navigation (navbar search, chip removal, "clear filters") must
+  // reach the input. Adjusted during render rather than in an effect, so it
+  // costs no extra commit — see react.dev "You Might Not Need an Effect".
+  const [syncedSearch, setSyncedSearch] = useState(filters.search);
+  if (filters.search !== syncedSearch) {
+    setSyncedSearch(filters.search);
+    setSearchDraft(filters.search);
+  }
+
+  // Typing -> filters. No-ops once they agree, so the sync above cannot bounce
+  // the value back mid-keystroke.
+  useEffect(() => {
+    if (searchDraft === filters.search) return;
+    const t = setTimeout(() => setFilter("search", searchDraft), 280);
+    return () => clearTimeout(t);
+  }, [searchDraft, filters.search, setFilter]);
+
   // Sync filters → URL (internal filter changes)
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1171,6 +1193,11 @@ function ShopContent() {
 
   const products   = productsData?.products ?? [];
   const pagination = productsData?.pagination ?? { total: 0, pages: 1, page: 1 };
+
+  // `relaxed`: no exact match existed, so the API widened the query rather than
+  // returning a dead end. `didYouMean`: nearest catalogue term when nothing matched.
+  const relaxed    = Boolean(productsData?.relaxed) && Boolean(filters.search);
+  const didYouMean = productsData?.didYouMean ?? null;
 
   const compareProducts = products.filter((p) => compareIds.includes(p.id));
 
@@ -1301,13 +1328,16 @@ function ShopContent() {
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                value={filters.search}
-                onChange={(e) => setFilter("search", e.target.value)}
+                value={searchDraft}
+                onChange={(e) => setSearchDraft(e.target.value)}
                 placeholder="Search products…"
                 className="w-full pl-10 pr-4 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               />
-              {filters.search && (
-                <button onClick={() => setFilter("search", "")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">
+              {searchDraft && (
+                <button
+                  onClick={() => { setSearchDraft(""); setFilter("search", ""); }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
+                >
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
@@ -1401,6 +1431,29 @@ function ShopContent() {
               </div>
             )}
 
+            {/* Nothing matched exactly — say so rather than pretending these are exact hits */}
+            {!isLoading && !isError && relaxed && products.length > 0 && (
+              <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <Search className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-900">
+                  No exact matches for <span className="font-semibold">“{filters.search}”</span>
+                  {didYouMean && (
+                    <>
+                      {" — did you mean "}
+                      <button
+                        onClick={() => { setSearchDraft(didYouMean); setFilter("search", didYouMean); }}
+                        className="font-semibold underline underline-offset-2 hover:opacity-70"
+                      >
+                        {didYouMean}
+                      </button>
+                      ?
+                    </>
+                  )}
+                  {" "}Showing the closest products we could find.
+                </p>
+              </div>
+            )}
+
             {/* Loading skeleton */}
             {isLoading && (
               <div className={view === "grid" ? "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4" : "space-y-4"}>
@@ -1429,10 +1482,28 @@ function ShopContent() {
             {!isLoading && !isError && products.length === 0 && (
               <div className="text-center py-20">
                 <ShoppingCart className="w-12 h-12 text-gray-200 mx-auto mb-4" />
-                <h3 className="font-bold text-gray-900 mb-1">No products found</h3>
-                <p className="text-sm text-gray-500 mb-5">Try adjusting your filters or search term.</p>
+                <h3 className="font-bold text-gray-900 mb-1">
+                  {filters.search ? `No results for “${filters.search}”` : "No products found"}
+                </h3>
+
+                {/* Offer the nearest catalogue term instead of a dead end. */}
+                {didYouMean ? (
+                  <p className="text-sm text-gray-500 mb-5">
+                    Did you mean{" "}
+                    <button
+                      onClick={() => { setSearchDraft(didYouMean); setFilter("search", didYouMean); }}
+                      className="font-semibold text-primary hover:underline"
+                    >
+                      {didYouMean}
+                    </button>
+                    ?
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-500 mb-5">Try adjusting your filters or search term.</p>
+                )}
+
                 <button
-                  onClick={() => setFiltersState({ category: null, search: "", minPrice: null, maxPrice: null, minRating: null, condition: null, delivery: null, brand: null, color: null, size: null, verifiedOnly: false, minDiscount: null, sort: "popular", page: 1 })}
+                  onClick={() => { setSearchDraft(""); setFiltersState({ category: null, search: "", minPrice: null, maxPrice: null, minRating: null, condition: null, delivery: null, brand: null, color: null, size: null, verifiedOnly: false, minDiscount: null, sort: "popular", page: 1 }); }}
                   className="px-6 py-2.5 bg-primary text-white rounded-full text-sm font-bold hover:opacity-90 transition-opacity"
                 >
                   Clear Filters

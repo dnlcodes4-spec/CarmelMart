@@ -29,7 +29,8 @@ import { logoutAction } from "@/app/actions/auth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePWAInstall } from "@/lib/pwa-install-context";
 
-import { PROMO_MESSAGES, SEARCH_SUGGESTIONS } from "./navbar.data";
+import { PROMO_MESSAGES } from "./navbar.data";
+import { useTrendingSearches } from "@/lib/useTrendingSearches";
 import { useCategories } from "@/lib/useCategories";
 import PromoStrip from "./PromoStrip";
 import SearchBar, { SuggestionsDropdown } from "./SearchBar";
@@ -135,6 +136,22 @@ export default function Navbar() {
     setActiveIndex(-1);
   }, [searchQuery]);
 
+  // ── Categories (fetched once per session, shared across all components) ──────
+  const { parents: parentCategories, subsByParent } = useCategories();
+  const searchCategories = ["All Categories", ...parentCategories.map((c) => c.name)];
+
+  // The dropdown holds a category NAME, but the API resolves a slug. Guessing
+  // one by lowercasing ("Fashion & Style" -> "fashion & style", or
+  // "fashion-&-style") never matched the real slug ("fashion-style"), so the
+  // lookup failed and every category-scoped search returned zero results.
+  const categorySlugFor = useCallback(
+    (name) =>
+      name === "All Categories"
+        ? null
+        : (parentCategories.find((c) => c.name === name)?.slug ?? null),
+    [parentCategories],
+  );
+
   const { data: liveData, isFetching: liveLoading } = useQuery({
     queryKey: ["search-autocomplete", debouncedQuery, searchCategory],
     queryFn: async () => {
@@ -142,11 +159,8 @@ export default function Navbar() {
         search: debouncedQuery,
         per_page: "7",
       });
-      if (searchCategory !== "All Categories")
-        params.set(
-          "category",
-          searchCategory.toLowerCase().replace(/\s+/g, "-"),
-        );
+      const slug = categorySlugFor(searchCategory);
+      if (slug) params.set("category", slug);
       const r = await fetch(`/api/products?${params}`);
       return r.json();
     },
@@ -157,16 +171,17 @@ export default function Navbar() {
 
   const liveResults = liveData?.products ?? [];
 
-  // ── Categories (fetched once per session, shared across all components) ──────
-  const { parents: parentCategories, subsByParent } = useCategories();
-  const searchCategories = ["All Categories", ...parentCategories.map((c) => c.name)];
+  // Derived from the live catalogue, so every chip returns results. The list it
+  // replaced was hardcoded (Nike Sneakers, iPhone 15 Pro, ...) and all nine
+  // entries matched nothing in this store.
+  const { suggestions: trendingSuggestions } = useTrendingSearches();
 
   const navItems = (() => {
     if (debouncedQuery.length >= 2)
       return liveResults.map((p) => ({ type: "product", data: p }));
     if (recentSearches.length > 0)
       return recentSearches.map((s) => ({ type: "recent", data: s }));
-    return SEARCH_SUGGESTIONS.slice(0, 5).map((s) => ({
+    return trendingSuggestions.slice(0, 5).map((s) => ({
       type: "trending",
       data: s,
     }));
@@ -174,10 +189,10 @@ export default function Navbar() {
 
   const filteredSuggestions =
     searchQuery.length >= 2
-      ? SEARCH_SUGGESTIONS.filter((s) =>
-          s.label.toLowerCase().includes(searchQuery.toLowerCase()),
-        ).slice(0, 3)
-      : SEARCH_SUGGESTIONS.slice(0, 5);
+      ? trendingSuggestions
+          .filter((s) => s.label.toLowerCase().includes(searchQuery.toLowerCase()))
+          .slice(0, 3)
+      : trendingSuggestions.slice(0, 5);
 
   // ── Search callbacks ──────────────────────────────────────────────────────
   const handleSearchSubmit = useCallback(
@@ -188,13 +203,11 @@ export default function Navbar() {
       setShowSuggestions(false);
       setActiveIndex(-1);
       setIsMobileMenuOpen(false);
-      const catParam =
-        searchCategory !== "All Categories"
-          ? `&category=${encodeURIComponent(searchCategory.toLowerCase())}`
-          : "";
+      const slug = categorySlugFor(searchCategory);
+      const catParam = slug ? `&category=${encodeURIComponent(slug)}` : "";
       router.push(q ? `/shop?q=${encodeURIComponent(q)}${catParam}` : "/shop");
     },
-    [router, searchQuery, searchCategory, addRecentSearch],
+    [router, searchQuery, searchCategory, addRecentSearch, categorySlugFor],
   );
 
   const handleSuggestionClick = useCallback(
@@ -335,6 +348,7 @@ export default function Navbar() {
     liveResults,
     liveLoading,
     filteredSuggestions,
+    trendingSuggestions,
     recentSearches,
     clearRecentSearches,
     searchCategories,

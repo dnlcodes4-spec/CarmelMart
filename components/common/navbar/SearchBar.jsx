@@ -3,7 +3,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, X, MapPin, ChevronDown, RotateCcw } from "lucide-react";
 import Image from "next/image";
-import { SEARCH_SUGGESTIONS, NIGERIAN_STATES } from "./navbar.data";
+import { NIGERIAN_STATES } from "./navbar.data";
 
 // ─── Highlight matching text in suggestions ───────────────────────────────────
 
@@ -27,6 +27,7 @@ function HighlightMatch({ text, query }) {
 export function SuggestionsDropdown({
   searchQuery, debouncedQuery, searchCategory,
   liveResults, liveLoading, filteredSuggestions,
+  trendingSuggestions = [],
   activeIndex, setActiveIndex,
   recentSearches, clearRecentSearches,
   onSuggestionClick, onProductClick, onSubmitAll,
@@ -185,10 +186,12 @@ export function SuggestionsDropdown({
             </>
           )}
 
-          <div className={`px-4 py-2.5 ${recentSearches.length > 0 ? "border-t border-gray-50" : "border-b border-gray-50"}`}>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Trending</p>
-          </div>
-          {SEARCH_SUGGESTIONS.slice(0, 5).map((s, idx) => {
+          {trendingSuggestions.length > 0 && (
+            <div className={`px-4 py-2.5 ${recentSearches.length > 0 ? "border-t border-gray-50" : "border-b border-gray-50"}`}>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Trending</p>
+            </div>
+          )}
+          {trendingSuggestions.slice(0, 5).map((s, idx) => {
             const navIdx   = recentSearches.length + idx;
             const isActive = navIdx === activeIndex;
             return (
@@ -219,6 +222,7 @@ export default function SearchBar({
   showSuggestions, setShowSuggestions,
   activeIndex, setActiveIndex,
   debouncedQuery, liveResults, liveLoading, filteredSuggestions,
+  trendingSuggestions,
   recentSearches, clearRecentSearches,
   deliveryLocation, setDeliveryLocation,
   showLocationPicker, setShowLocationPicker,
@@ -331,6 +335,7 @@ export default function SearchBar({
               liveResults={liveResults}
               liveLoading={liveLoading}
               filteredSuggestions={filteredSuggestions}
+              trendingSuggestions={trendingSuggestions}
               activeIndex={activeIndex}
               setActiveIndex={setActiveIndex}
               recentSearches={recentSearches}
