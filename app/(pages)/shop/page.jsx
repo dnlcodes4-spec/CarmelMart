@@ -308,7 +308,7 @@ function ProductCard({ product, view, onAddToCart, onToggleWishlist, inWishlist,
       <div className="bg-white rounded-2xl border border-gray-100 hover:shadow-md transition-shadow p-4 flex gap-4">
         <Link href={`/product/${product.id}`} className="shrink-0">
           <div className="relative w-32 h-32 rounded-xl overflow-hidden bg-gray-50">
-            {product.image && <Image src={product.image} alt={product.name} fill className="object-cover" />}
+            {product.image && <Image src={product.image} alt={product.name} fill className="object-cover" sizes="128px" />}
           </div>
         </Link>
         <div className="flex-1 min-w-0">
@@ -378,7 +378,7 @@ function ProductCard({ product, view, onAddToCart, onToggleWishlist, inWishlist,
       <Link href={`/product/${product.id}`}>
         <div className="relative aspect-square overflow-hidden bg-gray-50">
           {product.image && (
-            <Image src={product.image} alt={product.name} fill className="object-cover group-hover:scale-105 transition-transform duration-500" />
+            <Image src={product.image} alt={product.name} fill sizes="(max-width: 767px) 50vw, (max-width: 1279px) 33vw, 300px" className="object-cover group-hover:scale-105 transition-transform duration-500" />
           )}
           {/* Badges */}
           <div className="absolute top-3 left-3 flex flex-col gap-1">
@@ -537,75 +537,98 @@ function ProductCard({ product, view, onAddToCart, onToggleWishlist, inWishlist,
   );
 }
 
-// ── Price Range Slider ────────────────────────────────────────────────────────
-const PRICE_SLIDER_MAX = 1_000_000;
+// ── Price Range ───────────────────────────────────────────────────────────────
+const PRICE_PRESETS = [
+  { label: "Under ₦5k",    min: null,   max: 5000   },
+  { label: "₦5k – ₦20k",   min: 5000,   max: 20000  },
+  { label: "₦20k – ₦100k", min: 20000,  max: 100000 },
+  { label: "₦100k+",       min: 100000, max: null   },
+];
 
-function PriceRangeSlider({ minPrice, maxPrice, onCommit }) {
-  const [localMin, setLocalMin] = useState(minPrice ?? 0);
-  const [localMax, setLocalMax] = useState(maxPrice ?? PRICE_SLIDER_MAX);
+const toDigits     = (s) => s.replace(/\D/g, "");
+const draftToValue = (s) => (s === "" ? null : Number(s));
+const valueToDraft = (v) => (v == null ? "" : String(v));
+const formatDraft  = (s) => (s === "" ? "" : Number(s).toLocaleString());
 
-  // Sync when external filters reset
-  useEffect(() => { setLocalMin(minPrice ?? 0); }, [minPrice]);
-  useEffect(() => { setLocalMax(maxPrice ?? PRICE_SLIDER_MAX); }, [maxPrice]);
+function PriceField({ value, onChange, onBlur, onKeyDown, label, placeholder }) {
+  return (
+    <div className="relative flex-1 min-w-0">
+      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-gray-400 pointer-events-none">₦</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        aria-label={label}
+        placeholder={placeholder}
+        value={formatDraft(value)}
+        onChange={(e) => onChange(toDigits(e.target.value))}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+        className="w-full pl-6 pr-2.5 py-2 rounded-xl border-2 border-gray-200 text-sm font-medium text-gray-900 placeholder:font-normal placeholder:text-gray-400 focus:border-primary focus:outline-none transition-colors"
+      />
+    </div>
+  );
+}
 
-  const minPct = (localMin / PRICE_SLIDER_MAX) * 100;
-  const maxPct = (localMax / PRICE_SLIDER_MAX) * 100;
+function PriceRangeInputs({ minPrice, maxPrice, onCommit }) {
+  const [minDraft, setMinDraft] = useState(valueToDraft(minPrice));
+  const [maxDraft, setMaxDraft] = useState(valueToDraft(maxPrice));
 
-  const handleMinChange = (e) => {
-    const v = Math.min(Number(e.target.value), localMax - 1000);
-    setLocalMin(v);
+  // Sync when filters change externally (chip removal, reset, back/forward nav)
+  useEffect(() => { setMinDraft(valueToDraft(minPrice)); }, [minPrice]);
+  useEffect(() => { setMaxDraft(valueToDraft(maxPrice)); }, [maxPrice]);
+
+  const commit = () => {
+    let min = draftToValue(minDraft);
+    let max = draftToValue(maxDraft);
+    if (min !== null && max !== null && min > max) [min, max] = [max, min];
+    if (min !== minPrice || max !== maxPrice) onCommit(min, max);
   };
-  const handleMaxChange = (e) => {
-    const v = Math.max(Number(e.target.value), localMin + 1000);
-    setLocalMax(v);
-  };
-  const handleCommit = () => {
-    onCommit(localMin > 0 ? localMin : null, localMax < PRICE_SLIDER_MAX ? localMax : null);
+
+  // Enter blurs the field, which commits via onBlur — no double fetch.
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
   };
 
   return (
     <div>
-      {/* Track + filled range */}
-      <div className="relative h-1.5 bg-gray-200 rounded-full mx-1 mb-4 mt-5">
-        <div
-          className="absolute h-1.5 bg-primary rounded-full"
-          style={{ left: `${minPct}%`, right: `${100 - maxPct}%` }}
+      <div className="flex items-center gap-2">
+        <PriceField
+          value={minDraft}
+          onChange={setMinDraft}
+          onBlur={commit}
+          onKeyDown={handleKeyDown}
+          label="Minimum price"
+          placeholder="Min"
         />
-        {/* Min thumb */}
-        <input
-          type="range"
-          min={0}
-          max={PRICE_SLIDER_MAX}
-          step={1000}
-          value={localMin}
-          onChange={handleMinChange}
-          onMouseUp={handleCommit}
-          onTouchEnd={handleCommit}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          style={{ zIndex: localMin > PRICE_SLIDER_MAX * 0.9 ? 5 : 3 }}
+        <span className="text-sm text-gray-400 shrink-0">–</span>
+        <PriceField
+          value={maxDraft}
+          onChange={setMaxDraft}
+          onBlur={commit}
+          onKeyDown={handleKeyDown}
+          label="Maximum price"
+          placeholder="Max"
         />
-        {/* Max thumb */}
-        <input
-          type="range"
-          min={0}
-          max={PRICE_SLIDER_MAX}
-          step={1000}
-          value={localMax}
-          onChange={handleMaxChange}
-          onMouseUp={handleCommit}
-          onTouchEnd={handleCommit}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          style={{ zIndex: 4 }}
-        />
-        {/* Visual thumb dots — centered on the track so they don't overflow above */}
-        <div className="absolute w-4 h-4 bg-white border-2 border-primary rounded-full shadow top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none" style={{ left: `${minPct}%` }} />
-        <div className="absolute w-4 h-4 bg-white border-2 border-primary rounded-full shadow top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none" style={{ left: `${maxPct}%` }} />
       </div>
 
-      {/* Labels */}
-      <div className="flex items-center justify-between text-xs font-semibold text-gray-700">
-        <span>₦{localMin.toLocaleString()}</span>
-        <span>{localMax >= PRICE_SLIDER_MAX ? "₦1M+" : `₦${localMax.toLocaleString()}`}</span>
+      <div className="grid grid-cols-2 gap-1.5 mt-2.5">
+        {PRICE_PRESETS.map((preset) => {
+          const active = preset.min === minPrice && preset.max === maxPrice;
+          return (
+            <button
+              key={preset.label}
+              onClick={() => (active ? onCommit(null, null) : onCommit(preset.min, preset.max))}
+              aria-pressed={active}
+              className={`px-2 py-1.5 rounded-lg text-xs font-medium border-2 transition-colors ${
+                active
+                  ? "border-primary bg-primary text-white"
+                  : "border-gray-200 text-gray-700 hover:border-primary/40"
+              }`}
+            >
+              {preset.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -814,7 +837,7 @@ function FilterSidebar({ filters, setFilter, parents, subsByParent, isOpen, onCl
             isActive={hasPrice}
             defaultOpen
           >
-            <PriceRangeSlider
+            <PriceRangeInputs
               minPrice={filters.minPrice}
               maxPrice={filters.maxPrice}
               onCommit={(min, max) => { setFilter("minPrice", min); setFilter("maxPrice", max); }}

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+// .mjs so scripts/backfill-product-images.mjs can share this exact logic.
+import { optimizeImage } from "@/lib/images/optimize.mjs";
 import { randomUUID } from "crypto";
 
 const MAX_BYTES   = 5 * 1024 * 1024; // 5 MB
@@ -41,15 +43,20 @@ export async function POST(request) {
       return NextResponse.json({ error: "File too large. Maximum size is 5 MB." }, { status: 400 });
     }
 
-    // Sanitise filename — keep extension only
-    const ext  = file.name.split(".").pop()?.toLowerCase()?.replace(/[^a-z0-9]/g, "") || "jpg";
-    const path = `vendors/${user.id}/${randomUUID()}.${ext}`;
+    let image;
+    try {
+      image = await optimizeImage(Buffer.from(bytes), file.type);
+    } catch {
+      return NextResponse.json({ error: "Image could not be processed. It may be corrupt." }, { status: 400 });
+    }
+
+    const path = `vendors/${user.id}/${randomUUID()}.${image.extension}`;
 
     const supabase = createAdminClient();
     const { error: uploadError } = await supabase.storage
       .from(BUCKET)
-      .upload(path, bytes, {
-        contentType:  file.type,
+      .upload(path, image.buffer, {
+        contentType:  image.contentType,
         cacheControl: "3600",
         upsert:       false,
       });
