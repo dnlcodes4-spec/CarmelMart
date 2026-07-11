@@ -30,6 +30,7 @@
     "react-is": "^18.3.1",
     "recharts": "^3.8.1",
     "resend": "^6.12.3",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "uuid": "^13.0.0",
     "zustand": "^5.0.8"
@@ -44,8 +45,11 @@
     "eslint": "^9",
     "eslint-config-next": "16.0.0",
     "jsdom": "^29.1.1",
-    "sharp": "^0.34.5",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
+  },
+  "optionalDependencies": {
+    "@img/sharp-libvips-linux-x64": "1.2.4",
+    "@img/sharp-linux-x64": "0.34.5"
   }
 }

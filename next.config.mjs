@@ -1,4 +1,8 @@
 const nextConfig = {
+  // sharp is a native module — keep it out of the webpack server bundle so Next
+  // traces the platform binary from node_modules into the serverless function.
+  serverExternalPackages: ["sharp"],
+
   // Retry failed chunk loads once before surfacing an error (helps with flaky CDN)
   webpack(config) {
     config.output.chunkLoadTimeout = 30000;
