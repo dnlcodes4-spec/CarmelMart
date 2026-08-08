@@ -33,6 +33,7 @@ import {
   Mail,
   Inbox,
   Calculator,
+  MapPin,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { logoutAction } from "@/app/actions/auth";
@@ -47,6 +48,7 @@ const NAV_ITEMS = [
   { href: "/admin/orders", label: "Orders", icon: ShoppingCart },
   { href: "/admin/disputes", label: "Disputes", icon: AlertTriangle },
   { href: "/admin/delivery-zones", label: "Delivery", icon: Truck },
+  { href: "/admin/fastlink", label: "Pickup Points", icon: MapPin },
   { href: "/admin/riders", label: "Riders", icon: Bike },
   { href: "/admin/auth-requests", label: "Auth Requests", icon: ShieldCheck },
   { href: "/admin/financials", label: "Financials", icon: BarChart2 },
