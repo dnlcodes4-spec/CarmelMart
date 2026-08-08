@@ -124,6 +124,25 @@ export async function POST(request) {
       return NextResponse.json({ received: true, matched: true, changed: false });
     }
 
+    // Record the transition so the customer timeline can show when each step
+    // happened. Guarded on fastlink_status having actually moved, so a redelivered
+    // event writes nothing here either. A failure is logged, never propagated —
+    // the order update is what matters, and losing an audit row must not trigger
+    // a retry of an event we have already applied.
+    if (update.fastlink_status) {
+      const { error: eventError } = await admin.from("fastlink_order_events").insert({
+        order_id:          order.id,
+        fastlink_order_id: fastlinkOrderId,
+        event,
+        fastlink_status:   fastlinkStatus,
+        carmel_status:     carmelStatus ?? null,
+        payload:           data ?? null,
+      });
+      if (eventError) {
+        console.error(`[fastlink-webhook] order ${order.id} event insert failed:`, eventError.message);
+      }
+    }
+
     if (isIssueStatus(fastlinkStatus)) {
       console.warn(`[fastlink-webhook] order ${order.id} needs attention — Fast Link status "${fastlinkStatus}"`);
     }

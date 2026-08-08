@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { buildTracking } from "@/lib/fastlink/tracking";
 
 // GET /api/customer/orders/[id] — full order detail for the authenticated customer
 export async function GET(request, { params }) {
@@ -17,6 +18,7 @@ export async function GET(request, { params }) {
       .select(`
         id, status, total, pod_deposit, payment_method, payment_status,
         payment_ref, delivery_address, notes, created_at,
+        fastlink_status, fastlink_dispatched_at,
         order_items (
           id, quantity, unit_price, total, delivery_format,
           variant_id, variant_combination,
@@ -33,31 +35,22 @@ export async function GET(request, { params }) {
 
     const addr = order.delivery_address ?? {};
 
-    // Build a status-driven tracking timeline
-    const STATUS_STEPS = [
-      { key: "placed",    label: "Order Placed"       },
-      { key: "confirmed", label: "Payment Confirmed"  },
-      { key: "processing",label: "Being Packed"       },
-      { key: "shipped",   label: "Out for Delivery"   },
-      { key: "delivered", label: "Delivered"          },
-    ];
+    // Delivery history timestamps the timeline steps. It is decoration on a page
+    // that must always render, so a failure here degrades to untimed steps rather
+    // than failing the request.
+    const { data: deliveryEvents } = await admin
+      .from("fastlink_order_events")
+      .select("fastlink_status, carmel_status, created_at")
+      .eq("order_id", id)
+      .order("created_at", { ascending: true });
 
-    const statusIndex = {
-      pending:    0,
-      confirmed:  1,
-      processing: 2,
-      shipped:    3,
-      delivered:  4,
-      cancelled:  -1,
-      refunded:   -1,
-    };
-
-    const currentIdx = statusIndex[order.status] ?? 0;
-
-    const tracking = STATUS_STEPS.map((step, i) => ({
-      label: step.label,
-      done:  order.status === "cancelled" ? false : i <= currentIdx,
-    }));
+    const { tracking, delivery } = buildTracking({
+      orderStatus:    order.status,
+      createdAt:      order.created_at,
+      fastlinkStatus: order.fastlink_status ?? null,
+      dispatchedAt:   order.fastlink_dispatched_at ?? null,
+      events:         deliveryEvents ?? [],
+    });
 
     // For delivered orders, pre-load which products this user has already reviewed
     let reviewedProductIds = [];
@@ -92,6 +85,7 @@ export async function GET(request, { params }) {
         delivery_method: addr.delivery_method ?? "standard",
         delivery_fee:   addr.delivery_fee ?? 0,
         tracking,
+        delivery,
         items: (order.order_items ?? []).map((it) => ({
           id:              it.id,
           product_id:      it.products?.id ?? null,

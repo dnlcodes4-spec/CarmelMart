@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { sendOrderConfirmation, sendVendorNewOrder } from "@/lib/email";
 import { quoteShippingForItems } from "@/lib/fastlink/shipping";
 import { dispatchOrder } from "@/lib/fastlink/orders";
+import { isIssueStatus } from "@/lib/fastlink/status";
 
 const FLUTTERWAVE_TIMEOUT_MS = 10_000;
 
@@ -120,7 +121,7 @@ export async function GET() {
     const { data: orders, error: qErr } = await admin
       .from("orders")
       .select(`
-        id, status, total, created_at, delivery_address,
+        id, status, total, created_at, delivery_address, fastlink_status,
         order_items ( id, quantity, unit_price, total,
           products ( name, images )
         )
@@ -141,6 +142,10 @@ export async function GET() {
       firstItem:       o.order_items?.[0]?.products?.name ?? "Order",
       firstImage:      o.order_items?.[0]?.products?.images?.[0] ?? null,
       deliveryAddress: o.delivery_address,
+      // Lets the list badge a stalled delivery without opening the order. The
+      // three Fast Link problem states all map to "shipped", so order.status
+      // alone cannot distinguish them.
+      hasDeliveryIssue: isIssueStatus(o.fastlink_status),
     }));
 
     return NextResponse.json({ orders: normalized });

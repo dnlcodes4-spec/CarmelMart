@@ -41,6 +41,20 @@ const STATUS_MAP = {
   refunded:   { label: "Refunded",   icon: RefreshCw,   color: "bg-gray-100 text-gray-700"    },
 };
 
+/**
+ * "12 Aug, 14:30" for a timeline step. Returns null for missing or unparseable
+ * input so callers can skip the line entirely — an untimed step is normal for
+ * orders with no delivery history.
+ */
+function formatStepTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString("en-NG", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
 // ── Skeleton ───────────────────────────────────────────────────────────────────
 function Skeleton() {
   return (
@@ -411,6 +425,9 @@ export default function OrderDetailPage() {
 
   const status    = STATUS_MAP[order?.status] ?? STATUS_MAP.pending;
   const StatusIcon = status.icon;
+  // Absent on orders placed before delivery tracking shipped, and on anything
+  // never handed to the delivery provider.
+  const delivery  = order?.delivery ?? null;
 
   const subtotal    = (order?.items ?? []).reduce((s, i) => s + i.price * i.quantity, 0);
   const deliveryFee = order?.delivery_fee ?? 0;
@@ -513,18 +530,37 @@ export default function OrderDetailPage() {
                           <p className={`text-sm font-semibold ${step.done ? "text-gray-900" : "text-gray-400"}`}>
                             {step.label}
                           </p>
+                          {formatStepTime(step.at) && (
+                            <p className="text-xs text-gray-400 mt-0.5">{formatStepTime(step.at)}</p>
+                          )}
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {order.status === "shipped" && (
+                {/* A stalled delivery still reads as carmel "shipped", so the
+                    reassuring note below would otherwise contradict it. The
+                    problem banner replaces it rather than sitting alongside. */}
+                {delivery?.isIssue && delivery.issue ? (
+                  <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-3 flex gap-2.5 text-amber-800">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm">{delivery.issue.title}</p>
+                      <p className="text-xs mt-0.5">{delivery.issue.message}</p>
+                      {formatStepTime(delivery.lastUpdate) && (
+                        <p className="text-[11px] text-amber-600 mt-1.5">
+                          Updated {formatStepTime(delivery.lastUpdate)}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : order.status === "shipped" ? (
                   <div className="mt-4 bg-purple-50 border border-purple-200 rounded-xl p-3 text-sm text-purple-800">
                     <p className="font-semibold">Out for Delivery</p>
                     <p className="text-xs mt-0.5">The rider will contact you before arrival. Please confirm receipt once you get your order.</p>
                   </div>
-                )}
+                ) : null}
               </div>
 
               {/* Customer action buttons */}

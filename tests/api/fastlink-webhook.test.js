@@ -38,12 +38,14 @@ function makeRequest(payload, { signature, rawOverride } = {}) {
   };
 }
 
-/** Fake admin client over a tiny in-memory orders table. */
-function makeAdmin(orders) {
+/** Fake admin client over in-memory `orders` and `fastlink_order_events` tables. */
+function makeAdmin(orders, { failEventInsert = false, failOrderUpdate = false } = {}) {
   const updates = [];
+  const events = [];
   const client = {
     updates,
-    from() {
+    events,
+    from(table) {
       const f = {};
       const chain = {
         select: () => chain,
@@ -52,9 +54,17 @@ function makeAdmin(orders) {
           data: orders.find((o) => Object.entries(f).every(([k, v]) => o[k] === v)) ?? null,
           error: null,
         }),
+        insert(values) {
+          if (table === "fastlink_order_events") {
+            if (failEventInsert) return Promise.resolve({ data: null, error: { message: "insert failed" } });
+            events.push(values);
+          }
+          return Promise.resolve({ data: null, error: null });
+        },
         update(values) {
           return {
             eq(col, val) {
+              if (failOrderUpdate) return Promise.resolve({ data: null, error: { message: "update failed" } });
               const row = orders.find((o) => o[col] === val);
               if (row) { Object.assign(row, values); updates.push({ id: row.id, values }); }
               return Promise.resolve({ data: null, error: null });
@@ -146,6 +156,66 @@ describe("status handling", () => {
     await POST(makeRequest(event("delivered")));
     expect(orders[0]).toEqual(afterFirst);
     expect(adminClient.updates).toHaveLength(writesAfterFirst);
+  });
+});
+
+describe("event history", () => {
+  it("records one event per genuine transition", async () => {
+    await POST(makeRequest(event("in_transit")));
+    expect(adminClient.events).toHaveLength(1);
+    const [row] = adminClient.events;
+    expect(row).toMatchObject({
+      order_id:          "order-1",
+      fastlink_order_id: "FL-100",
+      event:             "order.status_changed",
+      fastlink_status:   "in_transit",
+      carmel_status:     "shipped",
+    });
+  });
+
+  it("stores the raw payload so a shape mismatch can be diagnosed later", async () => {
+    await POST(makeRequest(event("in_transit", { rider: { name: "Ade" } })));
+    expect(adminClient.events[0].payload).toMatchObject({
+      id: "FL-100", status: "in_transit", rider: { name: "Ade" },
+    });
+  });
+
+  it("records an unmapped status with a null carmel_status", async () => {
+    await POST(makeRequest(event("teleported")));
+    expect(adminClient.events[0]).toMatchObject({
+      fastlink_status: "teleported",
+      carmel_status:   null,
+    });
+  });
+
+  it("writes no event when the same status is redelivered", async () => {
+    await POST(makeRequest(event("in_transit")));
+    expect(adminClient.events).toHaveLength(1);
+    await POST(makeRequest(event("in_transit")));
+    expect(adminClient.events).toHaveLength(1);
+  });
+
+  it("still records the late event when a delivered order cannot regress", async () => {
+    adminClient = makeAdmin([{ ...ORDER(), status: "delivered", fastlink_status: "delivered" }]);
+    await POST(makeRequest(event("in_transit")));
+    expect(adminClient.events).toHaveLength(1);
+    expect(adminClient.events[0].carmel_status).toBe("shipped");
+  });
+
+  it("keeps the order update when the event insert fails", async () => {
+    const orders = [ORDER()];
+    adminClient = makeAdmin(orders, { failEventInsert: true });
+    const res = await POST(makeRequest(event("in_transit")));
+    expect(res.status).toBe(200);
+    expect(orders[0].status).toBe("shipped");
+    expect(orders[0].fastlink_status).toBe("in_transit");
+  });
+
+  it("writes no event when the order update itself fails", async () => {
+    adminClient = makeAdmin([ORDER()], { failOrderUpdate: true });
+    const res = await POST(makeRequest(event("in_transit")));
+    expect(res.status).toBe(200);
+    expect(adminClient.events).toHaveLength(0);
   });
 });
 
