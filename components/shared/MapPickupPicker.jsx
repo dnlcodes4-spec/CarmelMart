@@ -33,13 +33,25 @@ const HEIGHT = 280;
 
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
-export default function MapPickupPicker({ value = null, onChange, disabled = false }) {
+/**
+ * @param {object}   props
+ * @param {object}  [props.value]        { latitude, longitude } already chosen
+ * @param {Function} props.onChange      called with { latitude, longitude }
+ * @param {object}  [props.initialCentre] where to open when nothing is chosen yet —
+ *                                       e.g. the centre of the customer's state, so
+ *                                       they are not panning across the country
+ * @param {boolean} [props.disabled]
+ */
+export default function MapPickupPicker({ value = null, onChange, initialCentre = null, disabled = false }) {
   const hasValue = Number.isFinite(value?.latitude) && Number.isFinite(value?.longitude);
+  const opening = hasValue
+    ? { lng: value.longitude, lat: value.latitude }
+    : (initialCentre ?? FALLBACK);
 
-  const [center, setCenter] = useState(
-    hasValue ? { lng: value.longitude, lat: value.latitude } : FALLBACK,
-  );
-  const [zoom, setZoom] = useState(hasValue ? DEFAULT_ZOOM : 5);
+  const [center, setCenter] = useState(opening);
+  // Country-wide when we have nothing; state-level when we know the state; close
+  // in once an actual point exists.
+  const [zoom, setZoom] = useState(hasValue ? DEFAULT_ZOOM : initialCentre ? 11 : 5);
   const [width, setWidth] = useState(0);
   const [drag, setDrag] = useState(null);       // live pixel offset while dragging
   const [locating, setLocating] = useState(false);

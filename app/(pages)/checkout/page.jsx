@@ -32,7 +32,8 @@ import { useUIStore } from "@/store/uiStore";
 import { useAuth } from "@/lib/auth-context";
 import { formatNigerianPhone } from "@/lib/utils";
 import StateLgaPicker from "@/components/ui/StateLgaPicker";
-import MapboxAddressAutocomplete from "@/components/shared/MapboxAddressAutocomplete";
+import MapPickupPicker from "@/components/shared/MapPickupPicker";
+import { stateCentre } from "@/lib/geo/nigeria";
 
 const DELIVERY_FALLBACK = [
   { id: "standard", label: "Standard Delivery", duration: "3–7 business days", fee: 1500 },
@@ -189,9 +190,6 @@ export default function CheckoutPage() {
     lat: null,
     lng: null,
   });
-
-  // Text shown in the Fast Link address search box (separate from structured fields).
-  const [addrSearch, setAddrSearch] = useState("");
 
   const [delivery, setDelivery] = useState("standard");
   const [payment, setPayment] = useState("flutterwave");
@@ -657,22 +655,35 @@ export default function CheckoutPage() {
                     </Field>
                   )}
 
-                  <Field label="Find your address" hint="Search and pick your address for accurate delivery pricing. You can still edit the details below.">
-                    <MapboxAddressAutocomplete
-                      value={addrSearch}
-                      placeholder="Start typing your street, area, or landmark…"
-                      onChange={(t) => {
-                        setAddrSearch(t);
-                        setAddress((p) => ({ ...p, lat: null, lng: null }));
-                      }}
-                      onSelect={({ address: a, latitude, longitude }) => {
-                        setAddrSearch(a);
-                        setAddress((p) => ({ ...p, lat: latitude, lng: longitude, street: p.street || a }));
-                      }}
+                  {/* Coordinates come from the map, not from resolving the typed
+                      address. Mapbox cannot place Nigerian street addresses
+                      reliably — an address naming Ibadan resolves to a Lagos
+                      street — and these coordinates decide both the delivery fee
+                      and where the rider is sent. The written address below is
+                      what helps them find the door once they arrive.
+                      Keyed on state so picking one re-centres the map. */}
+                  <Field
+                    label="Pin your delivery location"
+                    hint="Drag the map so the crosshair sits on your building. This sets your delivery fee and guides the rider."
+                  >
+                    <MapPickupPicker
+                      key={address.state || "no-state"}
+                      value={address.lat != null && address.lng != null
+                        ? { latitude: address.lat, longitude: address.lng }
+                        : null}
+                      initialCentre={stateCentre(address.state)}
+                      onChange={({ latitude, longitude }) =>
+                        setAddress((p) => ({ ...p, lat: latitude, lng: longitude }))}
                     />
-                    {address.lat != null && address.lng != null && (
+                    {address.lat != null && address.lng != null ? (
                       <p className="text-xs text-green-600 flex items-center gap-1 mt-1.5">
-                        <CheckCircle className="w-3.5 h-3.5" /> Location pinned for delivery pricing
+                        <CheckCircle className="w-3.5 h-3.5" /> Delivery location pinned
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        {address.state
+                          ? "Pin your location for accurate delivery pricing."
+                          : "Choose your state below, then pin your exact location."}
                       </p>
                     )}
                   </Field>
