@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendVendorKYCDecision } from "@/lib/email";
+import { syncVendorToFastLink, recordSyncError } from "@/lib/fastlink/merchants";
 
 async function verifyAdmin() {
   const supabase = await createClient();
@@ -51,6 +52,16 @@ export async function PATCH(request, { params }) {
         .from("users")
         .update({ verified: true, updated_at: new Date().toISOString() })
         .eq("id", id);
+
+      // Provision the vendor as a Fast Link merchant (+ pickup). Best-effort:
+      // a Fast Link outage must never block a KYC approval. No-ops cleanly when
+      // Fast Link credentials aren't configured yet.
+      try {
+        await syncVendorToFastLink(admin, id);
+      } catch (flErr) {
+        console.error(`[admin/vendors] Fast Link provisioning failed for ${id}:`, flErr.message);
+        await recordSyncError(admin, id, flErr);
+      }
     }
 
     // Email the vendor about the KYC decision

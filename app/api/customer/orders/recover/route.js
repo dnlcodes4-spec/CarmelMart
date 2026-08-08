@@ -18,6 +18,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendOrderConfirmation, sendVendorNewOrder } from "@/lib/email";
+import { quoteShippingForItems } from "@/lib/fastlink/shipping";
+import { dispatchOrder } from "@/lib/fastlink/orders";
 
 const FLW_SECRET_KEY = process.env.FLUTTERWAVE_SECRET_KEY;
 const FLW_TIMEOUT_MS = 10_000;
@@ -161,7 +163,14 @@ export async function POST(request) {
     });
 
     const subtotal    = orderItems.reduce((sum, i) => sum + i.total, 0);
-    const deliveryFee = toPositiveInt(delivery_address?.delivery_fee, 0);
+
+    // Recompute the delivery fee server-side via Fast Link (falls back to the
+    // client fee when Fast Link can't price the cart) — same as the main POST.
+    let deliveryFee = toPositiveInt(delivery_address?.delivery_fee, 0);
+    if (orderItems.some((i) => i.delivery_format !== "digital")) {
+      const quote = await quoteShippingForItems({ admin, destination: delivery_address, items: orderItems });
+      if (!quote.fallback) deliveryFee = quote.totalFee;
+    }
 
     // Best-effort promo re-validation — if the promo expired between checkout
     // and recovery, proceed without the discount rather than blocking the order.
@@ -244,6 +253,9 @@ export async function POST(request) {
         }
       }
     }
+
+    // Hand the recovered order to Fast Link (best-effort + idempotent).
+    await dispatchOrder(admin, orderId);
 
     return NextResponse.json({ success: true, order_id: orderId });
   } catch (error) {
