@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import SubscriptionBadge from "@/components/shared/vendor/SubscriptionBadge";
 import VendorKYCWall from "@/components/shared/vendor/VendorKYCWall";
-import DeliveryRiderPrompt from "@/components/shared/vendor/DeliveryRiderPrompt";
+import PickupPointPrompt from "@/components/shared/vendor/PickupPointPrompt";
 import VendorBankAlert from "@/components/shared/vendor/VendorBankAlert";
 import { useAuth } from "@/lib/auth-context";
 import { logoutAction } from "@/app/actions/auth";
@@ -345,8 +345,11 @@ export default function VendorShell({ children }) {
           Rendered above (and before) the rider prompt so it takes priority. */}
       <VendorBankAlert enabled={!!kycData && !kycIncomplete} />
 
-      {/* Delivery-rider prompt — only once KYC is complete so it never stacks on the wall */}
-      <DeliveryRiderPrompt enabled={!!kycData && !kycIncomplete} />
+      {/* Pickup-point prompt — only once KYC is complete so it never stacks on the
+          wall. Replaces the deprecated delivery-rider prompt: whether a vendor has
+          their own rider stops mattering once Fast Link handles dispatch, whereas a
+          pickup point is what Fast Link cannot work without. */}
+      <PickupPointPrompt enabled={!!kycData && !kycIncomplete} />
 
       {/* ── Mobile bottom tab bar ────────────────────────────────────────── */}
       <nav

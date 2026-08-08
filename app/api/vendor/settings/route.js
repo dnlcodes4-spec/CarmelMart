@@ -57,7 +57,8 @@ export async function PATCH(request) {
     if (bank_code          !== undefined) update.bank_code          = bank_code.trim();
     if (bank_name          !== undefined) update.bank_name          = bank_name.trim();
     if (notification_preferences !== undefined) update.notification_preferences = notification_preferences;
-    // Fast Link pickup location (autocomplete-selected: address text + coordinates).
+    // Fast Link pickup location. Coordinates come from the vendor placing a map pin;
+    // the address text is a description for the rider, not a geocoding source.
     if (pickup_label   !== undefined) update.pickup_label   = pickup_label?.trim() || null;
     if (pickup_address !== undefined) update.pickup_address = pickup_address?.trim() || null;
     if (pickup_lat     !== undefined) update.pickup_lat     = pickup_lat != null && pickup_lat !== "" ? Number(pickup_lat) : null;

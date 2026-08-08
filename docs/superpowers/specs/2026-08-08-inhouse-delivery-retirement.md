@@ -69,7 +69,7 @@ Only then is the inventory below safe to remove.
 | `components/shared/rider/RiderShell.jsx` | |
 | `app/api/admin/vendor-riders/route.js` | vendor self-reported rider capability |
 | `app/api/vendor/delivery-rider/route.js` | |
-| `components/shared/vendor/DeliveryRiderPrompt.jsx` | |
+| `components/shared/vendor/DeliveryRiderPrompt.jsx` | **already unrendered** — VendorShell now shows PickupPointPrompt in its slot, so this is dead code and safe to delete ahead of the rest |
 | `app/api/customer/orders/[id]/rider-review/route.js` | check `rider_reviews` retention first |
 | `app/api/admin/delivery-zones/route.js` | only after Fast Link prices every order |
 | `app/api/admin/delivery-zones/[id]/route.js` | |
