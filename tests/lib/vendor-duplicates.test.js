@@ -12,6 +12,7 @@ import {
   normalizePhone,
   normalizeBusinessName,
   findDuplicateVendors,
+  describeDuplicates,
 } from "@/lib/vendors/duplicates";
 
 const VENDORS = [
@@ -122,5 +123,45 @@ describe("findDuplicateVendors", () => {
     await expect(
       findDuplicateVendors(broken, { vendorId: "x", phone: "08011112222", businessName: "X" }),
     ).resolves.toEqual([]);
+  });
+});
+
+describe("describeDuplicates", () => {
+  const dupe = (name, ...matchedOn) => ({ id: name, business_name: name, matchedOn });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(describeDuplicates([])).toBeNull();
+    expect(describeDuplicates(null)).toBeNull();
+    expect(describeDuplicates(undefined)).toBeNull();
+  });
+
+  it("names the single match and what matched", () => {
+    const msg = describeDuplicates([dupe("Slayfits.NG", "phone", "name")]);
+    expect(msg).toContain("Slayfits.NG");
+    expect(msg).toMatch(/phone/i);
+    expect(msg).toMatch(/name/i);
+  });
+
+  it("reads naturally for one match", () => {
+    const msg = describeDuplicates([dupe("BisiBagz", "name")]);
+    expect(msg).not.toMatch(/\b1 vendors\b/);
+    expect(msg).toMatch(/already verified/i);
+  });
+
+  it("counts several matches rather than listing endlessly", () => {
+    const msg = describeDuplicates([dupe("A", "name"), dupe("B", "name"), dupe("C", "phone")]);
+    expect(msg).toContain("3");
+  });
+
+  it("still names the businesses when there are several", () => {
+    const msg = describeDuplicates([dupe("A", "name"), dupe("B", "phone")]);
+    expect(msg).toContain("A");
+    expect(msg).toContain("B");
+  });
+
+  it("survives a duplicate with no name", () => {
+    const msg = describeDuplicates([{ id: "x", business_name: null, matchedOn: ["phone"] }]);
+    expect(typeof msg).toBe("string");
+    expect(msg.length).toBeGreaterThan(0);
   });
 });

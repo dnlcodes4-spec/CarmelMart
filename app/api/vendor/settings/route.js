@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { config } from "@/lib/config";
 import { syncPickupAddress, recordSyncError } from "@/lib/fastlink/merchants";
+import { fillRegionFromPoint } from "@/lib/vendors/region";
 
 export async function GET() {
   try {
@@ -127,6 +128,15 @@ export async function PATCH(request) {
     }
     const { error: upErr } = await admin.from("vendors").update(update).eq("id", user.id);
     if (upErr) throw upErr;
+
+    // The pin is authoritative, so let it fill city/state where they are blank.
+    // Most vendors have neither, and parsing them out of the free-text address
+    // would repeat the guesswork the map exists to replace.
+    if (update.pickup_lat != null && update.pickup_lng != null) {
+      await fillRegionFromPoint(admin, user.id, {
+        latitude: update.pickup_lat, longitude: update.pickup_lng,
+      });
+    }
 
     // If the pickup location changed, push a fresh default pickup to Fast Link.
     // Best-effort — never fail the settings save on a delivery-provider hiccup.

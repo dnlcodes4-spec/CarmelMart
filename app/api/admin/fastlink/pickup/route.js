@@ -14,6 +14,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncPickupAddress } from "@/lib/fastlink/merchants";
+import { fillRegionFromPoint } from "@/lib/vendors/region";
 
 /**
  * Nigeria's bounding box, padded slightly. A point outside it is a transposed
@@ -109,6 +110,10 @@ export async function POST(request) {
 
     const { error: updateError } = await admin.from("vendors").update(update).eq("id", vendorId);
     if (updateError) throw updateError;
+
+    // city/state are display-only and mostly null. The point is authoritative,
+    // so derive them from it rather than leaving the gap or guessing from text.
+    await fillRegionFromPoint(admin, vendorId, { latitude: lat, longitude: lng });
 
     // Fast Link has no pickup update endpoint, so force a fresh default. Failing
     // here must not lose the coordinates — they are saved, and the sync can be
