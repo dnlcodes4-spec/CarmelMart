@@ -23,12 +23,9 @@ import {
   FASTLINK_SIGNATURE_HEADER,
   FASTLINK_EVENT_HEADER,
 } from "@/lib/fastlink/webhook";
-import { toCarmelStatus, isIssueStatus } from "@/lib/fastlink/status";
+import { toCarmelStatus, isIssueStatus, TERMINAL_CARMEL_STATUSES } from "@/lib/fastlink/status";
 
 const HANDLED_EVENTS = new Set(["order.created", "order.status_changed", "order.assigned"]);
-
-/** Once an order reaches one of these, a late Fast Link event must not move it back. */
-const TERMINAL_CARMEL_STATUSES = new Set(["delivered", "completed", "cancelled"]);
 
 const ORDER_COLUMNS = "id, status, fastlink_order_id, fastlink_status";
 
