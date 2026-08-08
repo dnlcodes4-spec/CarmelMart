@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, RefreshCw, MapPin, CheckCircle2 } from "lucide-react";
 import { NIGERIAN_BANKS, getBankName } from "@/lib/nigerian-banks";
 import VariantPresetsManager from "@/components/shared/vendor/VariantPresetsManager";
-import MapboxAddressAutocomplete from "@/components/shared/MapboxAddressAutocomplete";
+import MapPickupPicker from "@/components/shared/MapPickupPicker";
 import { useAuth } from "@/lib/auth-context";
 import { updatePasswordAction } from "@/app/actions/auth";
 import toast from "react-hot-toast";
@@ -115,8 +115,13 @@ function PasswordSection() {
 }
 
 // Pickup location for Fast Link deliveries. Riders collect orders from here.
-// Address autocomplete captures coordinates; if the map token isn't configured,
-// a plain address is saved and the server geocodes it on save.
+//
+// Coordinates come from the map, not from the typed address. Mapbox cannot place
+// Nigerian street addresses reliably — tested against all 61 verified vendors,
+// one produced a result it could locate in the correct state — so server-side
+// geocoding now refuses low-confidence results rather than inventing a point.
+// The address field is a description for the rider once they arrive.
+//
 // Rendered with key={settings.id} so it remounts with fresh initial state once
 // settings load — no prop→state sync effect needed.
 function PickupSection({ settings }) {
@@ -147,37 +152,46 @@ function PickupSection({ settings }) {
   return (
     <Section title="Pickup Location">
       <p className="text-sm text-gray-500 dark:text-gray-400">
-        Where riders collect orders from your store. Start typing your address and pick the
-        closest match so we can locate it precisely.
+        Where riders collect orders from your store. Set the exact spot on the map — typed
+        addresses are not reliable enough to locate a shop in Nigeria, so the map is what we
+        send the rider to.
       </p>
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">Pickup Address</label>
-          <MapboxAddressAutocomplete
-            value={address}
-            placeholder="Street, area, or landmark…"
-            onChange={(text) => {
-              setAddress(text);
-              setCoords({ lat: null, lng: null }); // free-typing invalidates any prior pin
-              setDirty(true);
-            }}
-            onSelect={({ address: a, latitude, longitude }) => {
-              setAddress(a);
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+            Pickup Point
+          </label>
+          <MapPickupPicker
+            value={hasCoords ? { latitude: coords.lat, longitude: coords.lng } : null}
+            onChange={({ latitude, longitude }) => {
               setCoords({ lat: latitude, lng: longitude });
               setDirty(true);
             }}
           />
-          {address.trim() && (
-            hasCoords ? (
-              <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 mt-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Location pinned
-              </p>
-            ) : (
-              <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1.5">
-                <MapPin className="w-3.5 h-3.5" /> This address will be located automatically when you save.
-              </p>
-            )
+          {hasCoords ? (
+            <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 mt-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Pickup point set
+            </p>
+          ) : (
+            <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1.5">
+              <MapPin className="w-3.5 h-3.5" /> Set your pickup point before saving.
+            </p>
           )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+            Address <span className="font-normal text-gray-400">(shown to the rider)</span>
+          </label>
+          <input
+            value={address}
+            onChange={(e) => { setAddress(e.target.value); setDirty(true); }}
+            placeholder="e.g. 12 Admiralty Way, opposite the filling station"
+            className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 dark:bg-gray-700 dark:text-gray-100 dark:placeholder:text-gray-500"
+          />
+          <p className="text-xs text-gray-400 mt-1.5">
+            Landmarks help the rider find you once they arrive. The map pin is what guides them there.
+          </p>
         </div>
         <div>
           <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
@@ -193,7 +207,7 @@ function PickupSection({ settings }) {
         <button
           type="button"
           onClick={() => savePickup()}
-          disabled={isPending || !dirty || !address.trim()}
+          disabled={isPending || !dirty || !hasCoords}
           className="flex items-center gap-2 bg-primary text-white text-sm font-bold px-6 py-2.5 rounded-full hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
           {isPending

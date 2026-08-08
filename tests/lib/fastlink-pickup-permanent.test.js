@@ -31,6 +31,7 @@ const VENDOR = {
   pickup_lng: null,
 };
 
+/** Confident: Mapbox placed it in the requested region. */
 const GEO_FEATURE = {
   geometry: { type: "Point", coordinates: [3.487438, 6.442287] },
   properties: {
@@ -38,8 +39,27 @@ const GEO_FEATURE = {
     name: "Lekki Phase 1",
     full_address: "Lekki Phase 1, Lagos, Lagos, Nigeria",
     context: { region: { name: "Lagos" }, country: { name: "Nigeria" } },
+    match_code: { street: "matched", place: "unmatched", region: "matched", confidence: "high" },
   },
 };
+
+/**
+ * The real failure this guards against: a vendor in Ibadan whose address Mapbox
+ * resolves to a Lagos street, self-reporting that it ignored city and state.
+ */
+const GEO_WRONG_STATE = {
+  geometry: { type: "Point", coordinates: [3.3792, 6.5244] },
+  properties: {
+    mapbox_id: "wrong",
+    name: "Alafia Street",
+    full_address: "Alafia Street 47, Lagos 10, Lagos, Nigeria",
+    context: { region: { name: "Lagos" }, country: { name: "Nigeria" } },
+    match_code: { street: "matched", place: "unmatched", region: "unmatched", confidence: "low" },
+  },
+};
+
+/** Swapped per-test so the fetch stub can return either. */
+let geoFeature = GEO_FEATURE;
 
 /**
  * Real column names, straight from the live schema. A stub that accepts any
@@ -104,6 +124,7 @@ let mapboxUrls;
 
 beforeEach(() => {
   mapboxUrls = [];
+  geoFeature = GEO_FEATURE;
   globalThis.fetch = vi.fn(async (input) => {
     const url = input.toString();
     const ok = (body) => ({
@@ -117,7 +138,7 @@ beforeEach(() => {
 
     if (url.includes("api.mapbox.com")) {
       mapboxUrls.push(new URL(url));
-      return ok({ type: "FeatureCollection", features: [GEO_FEATURE] });
+      return ok({ type: "FeatureCollection", features: [geoFeature] });
     }
     return ok({ id: 987 }); // Fast Link createPickupAddress
   });
@@ -150,6 +171,27 @@ describe("syncPickupAddress", () => {
     const updates = [];
     await expect(syncPickupAddress(makeAdmin(updates), VENDOR.id)).resolves.not.toThrow();
     expect(updates.find((u) => u.table === "vendors")).toBeDefined();
+  });
+
+  it("creates no pickup when the geocode landed in the wrong region", async () => {
+    geoFeature = GEO_WRONG_STATE;
+    const updates = [];
+    const pickupId = await syncPickupAddress(makeAdmin(updates), VENDOR.id);
+
+    // Better no pickup point than one in the wrong city — Fast Link has no
+    // update endpoint, so a bad pickup is effectively permanent.
+    expect(pickupId).toBeNull();
+    const vendorUpdate = updates.find((u) => u.table === "vendors");
+    expect(vendorUpdate?.values?.pickup_lat).toBeUndefined();
+  });
+
+  it("does not call Fast Link at all when the geocode is not trustworthy", async () => {
+    geoFeature = GEO_WRONG_STATE;
+    await syncPickupAddress(makeAdmin([]), VENDOR.id);
+    const flCalls = globalThis.fetch.mock.calls
+      .map((c) => c[0].toString())
+      .filter((u) => u.includes("fastlink"));
+    expect(flCalls).toHaveLength(0);
   });
 
   it("falls back to vendors.address when no pickup_address is set", async () => {
