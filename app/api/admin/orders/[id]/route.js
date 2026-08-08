@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { config } from "@/lib/config";
 
 async function requireAdmin() {
   const supabase = await createClient();
@@ -102,6 +103,17 @@ export async function PATCH(request, { params }) {
 
     const { id: orderId } = await params;
     const { rider_id } = await request.json();
+
+    // Assignment is the one door into the in-house delivery path, so it is where
+    // that path closes when Fast Link takes over. Clearing a rider stays allowed
+    // — otherwise an order could be stranded with someone no longer delivering.
+    const isAssigning = rider_id !== null && rider_id !== undefined;
+    if (isAssigning && !config.delivery.inHouseEnabled) {
+      return NextResponse.json(
+        { error: "In-house rider delivery is retired. Orders are dispatched through the delivery provider instead." },
+        { status: 409 },
+      );
+    }
 
     // Fetch current order to check status and previous rider
     const { data: order, error: orderErr } = await admin

@@ -4,16 +4,28 @@ export async function generateMetadata({ params }) {
   const { slug } = await params;
   try {
     const admin = createAdminClient();
+    // No product embed here: products.vendor_id FKs to users.id, not vendors.id,
+    // so PostgREST has no relationship to traverse. vendors.id === users.id, so
+    // the sample image is fetched in a second query keyed on the vendor id.
     const { data: vendor } = await admin
       .from("vendors")
-      .select("business_name, business_address, products ( images )")
+      .select("id, business_name")
       .eq("slug", slug)
       .eq("verification_status", "verified")
       .maybeSingle();
 
     if (!vendor) return { title: "Vendor Store | CarmelMart" };
 
-    const image = vendor.products?.[0]?.images?.[0] ?? null;
+    const { data: product } = await admin
+      .from("products")
+      .select("images")
+      .eq("vendor_id", vendor.id)
+      .eq("status", "active")
+      .eq("moderation_status", "approved")
+      .limit(1)
+      .maybeSingle();
+
+    const image = product?.images?.[0] ?? null;
     const name  = vendor.business_name;
 
     return {

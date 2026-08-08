@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendVendorKYCDecision } from "@/lib/email";
+import { syncVendorToFastLink, recordSyncError } from "@/lib/fastlink/merchants";
+import { findDuplicateVendors } from "@/lib/vendors/duplicates";
 
 async function verifyAdmin() {
   const supabase = await createClient();
@@ -51,15 +53,38 @@ export async function PATCH(request, { params }) {
         .from("users")
         .update({ verified: true, updated_at: new Date().toISOString() })
         .eq("id", id);
+
+      // Provision the vendor as a Fast Link merchant (+ pickup). Best-effort:
+      // a Fast Link outage must never block a KYC approval. No-ops cleanly when
+      // Fast Link credentials aren't configured yet.
+      try {
+        await syncVendorToFastLink(admin, id);
+      } catch (flErr) {
+        console.error(`[admin/vendors] Fast Link provisioning failed for ${id}:`, flErr.message);
+        await recordSyncError(admin, id, flErr);
+      }
     }
+
+    // Sellers who mistype their email at signup re-register instead of recovering
+    // the account, leaving two vendor rows for one business. Surface the overlap
+    // here, where an admin can act on it. Advisory only — never blocks approval.
+    let duplicates = [];
 
     // Email the vendor about the KYC decision
     if (action === "approve" || action === "reject") {
       // vendors.id === users.id — fetch separately to avoid cross-schema FK join
       const [{ data: vendorRow }, { data: userRow }] = await Promise.all([
-        admin.from("vendors").select("business_name").eq("id", id).single(),
+        admin.from("vendors").select("business_name, phone").eq("id", id).single(),
         admin.from("users").select("email").eq("id", id).single(),
       ]);
+
+      if (action === "approve") {
+        duplicates = await findDuplicateVendors(admin, {
+          vendorId:     id,
+          phone:        vendorRow?.phone,
+          businessName: vendorRow?.business_name,
+        });
+      }
 
       const vendorEmail = userRow?.email;
       const vendorName  = vendorRow?.business_name ?? "Vendor";
@@ -73,7 +98,7 @@ export async function PATCH(request, { params }) {
       }
     }
 
-    return NextResponse.json({ success: true, status: newStatus });
+    return NextResponse.json({ success: true, status: newStatus, duplicates });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

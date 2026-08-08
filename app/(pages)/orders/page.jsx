@@ -219,6 +219,14 @@ export default function OrdersPage() {
                         {order.firstItem}
                         {order.itemCount > 1 ? ` + ${order.itemCount - 1} more` : ""}
                       </p>
+                      {/* All three delivery problem states read as "shipped", so
+                          the status chip alone cannot show something is wrong. */}
+                      {order.hasDeliveryIssue && (
+                        <span className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                          <AlertCircle className="w-3 h-3 shrink-0" />
+                          Delivery issue
+                        </span>
+                      )}
                       <div className="flex items-center gap-3 text-xs text-gray-500">
                         <span>{order.date}</span>
                         <span>·</span>

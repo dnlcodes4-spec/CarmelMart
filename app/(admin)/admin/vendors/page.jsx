@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import toast from "react-hot-toast";
+import { describeDuplicates } from "@/lib/vendors/duplicates";
 
 async function fetchVendors(params) {
   const r = await fetch(`/api/admin/vendors?${params}`);
@@ -101,8 +102,18 @@ export default function AdminVendorsPage() {
       if (!r.ok) throw new Error(d.error || "Failed");
       return d;
     },
-    onSuccess: (_, { action }) => {
+    onSuccess: (data, { action }) => {
       toast.success(`Vendor ${action}d`);
+
+      // Sellers who mistype their email at signup register again rather than
+      // recover the account, so the same business ends up verified twice — and
+      // each copy becomes its own delivery-provider merchant. Approval is the
+      // moment an admin is looking at the vendor and can act on it.
+      const warning = action === "approve" ? describeDuplicates(data?.duplicates) : null;
+      if (warning) {
+        toast(warning, { icon: "⚠️", duration: 15_000, style: { maxWidth: "32rem" } });
+      }
+
       qc.invalidateQueries({ queryKey: ["admin-vendors"] });
       qc.invalidateQueries({ queryKey: ["admin-stats"] });
       setConfirm(null);

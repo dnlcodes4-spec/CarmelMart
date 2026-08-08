@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendOrderConfirmation, sendVendorNewOrder } from "@/lib/email";
+import { quoteShippingForItems } from "@/lib/fastlink/shipping";
+import { dispatchOrder } from "@/lib/fastlink/orders";
+import { isIssueStatus } from "@/lib/fastlink/status";
 
 const FLUTTERWAVE_TIMEOUT_MS = 10_000;
 
@@ -118,7 +121,7 @@ export async function GET() {
     const { data: orders, error: qErr } = await admin
       .from("orders")
       .select(`
-        id, status, total, created_at, delivery_address,
+        id, status, total, created_at, delivery_address, fastlink_status,
         order_items ( id, quantity, unit_price, total,
           products ( name, images )
         )
@@ -139,6 +142,10 @@ export async function GET() {
       firstItem:       o.order_items?.[0]?.products?.name ?? "Order",
       firstImage:      o.order_items?.[0]?.products?.images?.[0] ?? null,
       deliveryAddress: o.delivery_address,
+      // Lets the list badge a stalled delivery without opening the order. The
+      // three Fast Link problem states all map to "shipped", so order.status
+      // alone cannot distinguish them.
+      hasDeliveryIssue: isIssueStatus(o.fastlink_status),
     }));
 
     return NextResponse.json({ orders: normalized });
@@ -251,7 +258,17 @@ export async function POST(request) {
     });
 
     const subtotal = orderItems.reduce((sum, item) => sum + item.total, 0);
-    const deliveryFee = toPositiveInt(delivery_address?.delivery_fee, 0);
+
+    // Delivery fee: recompute server-side via Fast Link so a tampered client fee
+    // can't stick. If Fast Link can't price the cart (disabled/no coords/etc.),
+    // fall back to the client-provided fee (unchanged legacy behaviour).
+    let deliveryFee = toPositiveInt(delivery_address?.delivery_fee, 0);
+    const hasPhysical = orderItems.some((i) => i.delivery_format !== "digital");
+    if (hasPhysical) {
+      const quote = await quoteShippingForItems({ admin, destination: delivery_address, items: orderItems });
+      if (!quote.fallback) deliveryFee = quote.totalFee;
+    }
+
     const { promoId, discount } = await calculatePromoDiscount(admin, user.id, promo_id, subtotal);
     const discountedSubtotal = Math.max(0, subtotal - discount);
     const total = discountedSubtotal + deliveryFee;
@@ -351,6 +368,11 @@ export async function POST(request) {
         }
       }
     }
+
+    // Hand the order to Fast Link for delivery. Best-effort + idempotent:
+    // payment already succeeded, so a delivery-provider hiccup must not fail the
+    // order — dispatchOrder swallows its own errors and records them for retry.
+    await dispatchOrder(admin, orderId);
 
     return NextResponse.json({ success: true, order_id: orderId });
   } catch (error) {

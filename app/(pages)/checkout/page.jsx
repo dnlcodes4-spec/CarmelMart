@@ -32,6 +32,8 @@ import { useUIStore } from "@/store/uiStore";
 import { useAuth } from "@/lib/auth-context";
 import { formatNigerianPhone } from "@/lib/utils";
 import StateLgaPicker from "@/components/ui/StateLgaPicker";
+import MapPickupPicker from "@/components/shared/MapPickupPicker";
+import { stateCentre } from "@/lib/geo/nigeria";
 
 const DELIVERY_FALLBACK = [
   { id: "standard", label: "Standard Delivery", duration: "3–7 business days", fee: 1500 },
@@ -116,6 +118,10 @@ export default function CheckoutPage() {
       const parsed = JSON.parse(saved);
       // Only surface recoveries from the last 24 h — older ones are stale
       if (parsed?.txRef && Date.now() - (parsed.savedAt ?? 0) < 24 * 60 * 60 * 1000) {
+        // Intentionally set post-mount (not via a lazy useState initializer):
+        // reading localStorage during render would cause an SSR hydration
+        // mismatch on the recovery banner.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setRecoveryData(parsed);
       } else {
         localStorage.removeItem(PENDING_CHECKOUT_KEY);
@@ -181,6 +187,8 @@ export default function CheckoutPage() {
     state: savedDeliveryState ?? "",
     lga: "",
     deliveryInstructions: "",
+    lat: null,
+    lng: null,
   });
 
   const [delivery, setDelivery] = useState("standard");
@@ -208,7 +216,29 @@ export default function CheckoutPage() {
     ];
   }, [zoneData]);
 
-  const deliveryFee = isAllDigital ? 0 : (DELIVERY_OPTIONS.find((o) => o.id === delivery)?.fee ?? 1500);
+  // Fast Link live shipping quote (per-vendor, summed). Runs once we have
+  // destination coordinates; degrades to the zone-based fee on any fallback.
+  const cartKey = items.map((i) => `${i.vendorId}:${i.quantity}`).join(",");
+  const canQuote = !isAllDigital && address.lat != null && address.lng != null && items.length > 0;
+  const { data: flQuote, isFetching: quoteLoading } = useQuery({
+    queryKey: ["shipping-quote", address.lat, address.lng, cartKey],
+    queryFn: () =>
+      fetch("/api/checkout/shipping-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destination: { lat: address.lat, lng: address.lng },
+          items: items.map((i) => ({ vendorId: i.vendorId, quantity: i.quantity })),
+        }),
+      }).then((r) => r.json()),
+    enabled: canQuote,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Use the Fast Link fee only when the whole cart was priced; else zone fee.
+  const flFee = flQuote?.ok && flQuote.fallback === false ? flQuote.totalFee : null;
+  const zoneFee = DELIVERY_OPTIONS.find((o) => o.id === delivery)?.fee ?? 1500;
+  const deliveryFee = isAllDigital ? 0 : (flFee ?? zoneFee);
   const discount = appliedPromo?.discount ?? 0;
   const discountedSubtotal = Math.max(0, total - discount);
   const grandTotal = discountedSubtotal + deliveryFee;
@@ -313,6 +343,9 @@ export default function CheckoutPage() {
           delivery_instructions:  address.deliveryInstructions,
           delivery_method:        delivery,
           delivery_fee:           deliveryFee,
+          lat:                    address.lat,
+          lng:                    address.lng,
+          coordinates:            address.lat != null && address.lng != null ? `${address.lat},${address.lng}` : null,
         },
         is_all_digital: isAllDigital,
         payment_method: "card",
@@ -369,6 +402,9 @@ export default function CheckoutPage() {
         delivery_method:       delivery,
         delivery_fee:          deliveryFee,
         email:                 address.email,
+        lat:                   address.lat,
+        lng:                   address.lng,
+        coordinates:           address.lat != null && address.lng != null ? `${address.lat},${address.lng}` : null,
       },
       is_all_digital: isAllDigital,
       payment_method: "card",
@@ -618,6 +654,39 @@ export default function CheckoutPage() {
                       </div>
                     </Field>
                   )}
+
+                  {/* Coordinates come from the map, not from resolving the typed
+                      address. Mapbox cannot place Nigerian street addresses
+                      reliably — an address naming Ibadan resolves to a Lagos
+                      street — and these coordinates decide both the delivery fee
+                      and where the rider is sent. The written address below is
+                      what helps them find the door once they arrive.
+                      Keyed on state so picking one re-centres the map. */}
+                  <Field
+                    label="Pin your delivery location"
+                    hint="Drag the map so the crosshair sits on your building. This sets your delivery fee and guides the rider."
+                  >
+                    <MapPickupPicker
+                      key={address.state || "no-state"}
+                      value={address.lat != null && address.lng != null
+                        ? { latitude: address.lat, longitude: address.lng }
+                        : null}
+                      initialCentre={stateCentre(address.state)}
+                      onChange={({ latitude, longitude }) =>
+                        setAddress((p) => ({ ...p, lat: latitude, lng: longitude }))}
+                    />
+                    {address.lat != null && address.lng != null ? (
+                      <p className="text-xs text-green-600 flex items-center gap-1 mt-1.5">
+                        <CheckCircle className="w-3.5 h-3.5" /> Delivery location pinned
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        {address.state
+                          ? "Pin your location for accurate delivery pricing."
+                          : "Choose your state below, then pin your exact location."}
+                      </p>
+                    )}
+                  </Field>
 
                   <div className="grid sm:grid-cols-3 gap-4">
                     <Field label="House No.">
@@ -876,7 +945,7 @@ export default function CheckoutPage() {
                   </div>
                 )}
                 <div className="flex justify-between text-gray-600">
-                  <span>Delivery</span>
+                  <span>Delivery{canQuote && quoteLoading && <span className="text-gray-400"> · calculating…</span>}</span>
                   <span className="font-medium text-gray-900">₦{deliveryFee.toLocaleString()}</span>
                 </div>
                 <div className="border-t border-gray-100 pt-2 flex justify-between font-bold text-base text-gray-900">

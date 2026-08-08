@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, RefreshCw } from "lucide-react";
+import { Save, AlertTriangle, RefreshCw, MapPin, CheckCircle2 } from "lucide-react";
 import { NIGERIAN_BANKS, getBankName } from "@/lib/nigerian-banks";
 import VariantPresetsManager from "@/components/shared/vendor/VariantPresetsManager";
+import MapPickupPicker from "@/components/shared/MapPickupPicker";
 import { useAuth } from "@/lib/auth-context";
 import { updatePasswordAction } from "@/app/actions/auth";
 import toast from "react-hot-toast";
@@ -113,6 +114,208 @@ function PasswordSection() {
   );
 }
 
+// Pickup location for Fast Link deliveries. Riders collect orders from here.
+//
+// Coordinates come from the map, not from the typed address. Mapbox cannot place
+// Nigerian street addresses reliably — tested against all 61 verified vendors,
+// one produced a result it could locate in the correct state — so server-side
+// geocoding now refuses low-confidence results rather than inventing a point.
+// The address field is a description for the rider once they arrive.
+//
+// Rendered with key={settings.id} so it remounts with fresh initial state once
+// settings load — no prop→state sync effect needed.
+function PickupSection({ settings }) {
+  const qc = useQueryClient();
+  const [label, setLabel]     = useState(settings.pickup_label   ?? "");
+  const [address, setAddress] = useState(settings.pickup_address ?? "");
+  const [coords, setCoords]   = useState({ lat: settings.pickup_lat ?? null, lng: settings.pickup_lng ?? null });
+  const [dirty, setDirty]     = useState(false);
+
+  const { mutate: savePickup, isPending } = useMutation({
+    mutationFn: () =>
+      saveSettings({
+        pickup_label:   label.trim() || null,
+        pickup_address: address.trim(),
+        pickup_lat:     coords.lat,
+        pickup_lng:     coords.lng,
+      }),
+    onSuccess: () => {
+      toast.success("Pickup location saved");
+      setDirty(false);
+      qc.invalidateQueries({ queryKey: ["vendor-settings"] });
+    },
+    onError: (e) => toast.error(e.message || "Failed to save pickup location. Please try again."),
+  });
+
+  const hasCoords = coords.lat != null && coords.lng != null;
+
+  return (
+    <Section title="Pickup Location">
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        Where riders collect orders from your store. Set the exact spot on the map — typed
+        addresses are not reliable enough to locate a shop in Nigeria, so the map is what we
+        send the rider to.
+      </p>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+            Pickup Point
+          </label>
+          <MapPickupPicker
+            value={hasCoords ? { latitude: coords.lat, longitude: coords.lng } : null}
+            onChange={({ latitude, longitude }) => {
+              setCoords({ lat: latitude, lng: longitude });
+              setDirty(true);
+            }}
+          />
+          {hasCoords ? (
+            <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 mt-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Pickup point set
+            </p>
+          ) : (
+            <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1.5">
+              <MapPin className="w-3.5 h-3.5" /> Set your pickup point before saving.
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+            Address <span className="font-normal text-gray-400">(shown to the rider)</span>
+          </label>
+          <input
+            value={address}
+            onChange={(e) => { setAddress(e.target.value); setDirty(true); }}
+            placeholder="e.g. 12 Admiralty Way, opposite the filling station"
+            className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 dark:bg-gray-700 dark:text-gray-100 dark:placeholder:text-gray-500"
+          />
+          <p className="text-xs text-gray-400 mt-1.5">
+            Landmarks help the rider find you once they arrive. The map pin is what guides them there.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5">
+            Label <span className="font-normal text-gray-400">(optional)</span>
+          </label>
+          <input
+            value={label}
+            onChange={(e) => { setLabel(e.target.value); setDirty(true); }}
+            placeholder="e.g. Main warehouse"
+            className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 dark:bg-gray-700 dark:text-gray-100 dark:placeholder:text-gray-500"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => savePickup()}
+          disabled={isPending || !dirty || !hasCoords}
+          className="flex items-center gap-2 bg-primary text-white text-sm font-bold px-6 py-2.5 rounded-full hover:opacity-90 disabled:opacity-50 transition-opacity"
+        >
+          {isPending
+            ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            : <Save className="w-4 h-4" />
+          }
+          {isPending ? "Saving…" : "Save Pickup Location"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+// Rendered with key={settings.id} so it remounts with fresh initial state.
+const DEFAULT_NOTIF = { new_order: true, order_status: true, payout: true, review: true, low_stock: true };
+
+function VacationSection({ settings }) {
+  const qc = useQueryClient();
+  const [vacationMode, setVacationMode] = useState(!!settings.vacation_mode);
+
+  const { mutate: toggleVacation, isPending: vacationPending } = useMutation({
+    mutationFn: (v) => saveSettings({ vacation_mode: v }),
+    onSuccess: (_, v) => {
+      toast.success(v ? "Vacation mode enabled — your products are hidden" : "Vacation mode disabled");
+      qc.invalidateQueries({ queryKey: ["vendor-settings"] });
+    },
+    onError: (e) => toast.error(e.message || "Failed to update vacation mode. Please try again."),
+  });
+
+  return (
+    <Section title="Vacation Mode">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Enable Vacation Mode</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Hides all your products from the store while you are away. Orders already placed are not affected.
+          </p>
+        </div>
+        <label className="relative inline-flex cursor-pointer shrink-0 ml-4">
+          <input
+            type="checkbox"
+            checked={vacationMode}
+            disabled={vacationPending}
+            onChange={(e) => {
+              const v = e.target.checked;
+              setVacationMode(v);
+              toggleVacation(v);
+            }}
+            className="sr-only peer"
+          />
+          <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500" />
+        </label>
+      </div>
+      {vacationMode && (
+        <div className="flex items-start gap-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 mt-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-400">
+            Your store is currently in vacation mode. Customers cannot see or purchase your products.
+          </p>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function NotificationsSection({ settings }) {
+  const [notifPrefs, setNotifPrefs] = useState({ ...DEFAULT_NOTIF, ...(settings.notification_preferences ?? {}) });
+
+  const { mutate: saveNotifPrefs } = useMutation({
+    mutationFn: (prefs) => saveSettings({ notification_preferences: prefs }),
+    onError: (e) => toast.error(e.message || "Failed to save notification preferences. Please try again."),
+  });
+
+  return (
+    <Section title="Notification Preferences">
+      <div className="space-y-4">
+        {[
+          { id: "new_order",    label: "New Order",           desc: "When a customer places an order" },
+          { id: "order_status", label: "Order Status Updates", desc: "Delivery and tracking updates"   },
+          { id: "payout",       label: "Payout Notifications", desc: "When funds are transferred"     },
+          { id: "review",       label: "Product Reviews",     desc: "When customers leave reviews"    },
+          { id: "low_stock",    label: "Low Stock Alerts",    desc: "When stock falls below 5 units"  },
+        ].map(({ id, label, desc }) => (
+          <div key={id} className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{label}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>
+            </div>
+            <label className="relative inline-flex cursor-pointer">
+              <input
+                type="checkbox"
+                checked={notifPrefs[id] ?? true}
+                onChange={(e) => {
+                  const updated = { ...notifPrefs, [id]: e.target.checked };
+                  setNotifPrefs(updated);
+                  saveNotifPrefs(updated);
+                }}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary" />
+            </label>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 export default function VendorSettingsPage() {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -179,38 +382,8 @@ export default function VendorSettingsPage() {
     onError: (e) => toast.error(e.message || "Failed to save bank details. Please try again."),
   });
 
-  // ── Vacation mode ──────────────────────────────────────────────────────────
-  const [vacationMode, setVacationMode] = useState(false);
-
-  useEffect(() => {
-    if (settings.id) setVacationMode(!!settings.vacation_mode);
-  }, [settings.id, settings.vacation_mode]);
-
-  const { mutate: toggleVacation, isPending: vacationPending } = useMutation({
-    mutationFn: (v) => saveSettings({ vacation_mode: v }),
-    onSuccess: (_, v) => {
-      toast.success(v ? "Vacation mode enabled — your products are hidden" : "Vacation mode disabled");
-      qc.invalidateQueries({ queryKey: ["vendor-settings"] });
-    },
-    onError: (e) => toast.error(e.message || "Failed to update vacation mode. Please try again."),
-  });
-
-  // ── Notification preferences ──────────────────────────────────────────────
-  const DEFAULT_NOTIF = { new_order: true, order_status: true, payout: true, review: true, low_stock: true };
-  const [notifPrefs, setNotifPrefs] = useState(DEFAULT_NOTIF);
-
-  useEffect(() => {
-    if (settings.id) {
-      setNotifPrefs({ ...DEFAULT_NOTIF, ...(settings.notification_preferences ?? {}) });
-    }
-  }, [settings.id]); // eslint-disable-line
-
-  const { mutate: saveNotifPrefs } = useMutation({
-    mutationFn: (prefs) => saveSettings({ notification_preferences: prefs }),
-    onError: (e) => toast.error(e.message || "Failed to save notification preferences. Please try again."),
-  });
-
-  // Password change is handled by the isolated <PasswordSection /> component below
+  // Vacation mode, notifications, and password are handled by isolated,
+  // key-remounted child components below (<VacationSection /> etc.)
 
   if (isLoading) {
     return (
@@ -338,72 +511,14 @@ export default function VendorSettingsPage() {
         </form>
       </Section>
 
+      {/* Pickup location (Fast Link delivery) */}
+      <PickupSection key={settings.id ?? "loading"} settings={settings} />
+
       {/* Vacation mode */}
-      <Section title="Vacation Mode">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Enable Vacation Mode</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Hides all your products from the store while you're away. Orders already placed are not affected.
-            </p>
-          </div>
-          <label className="relative inline-flex cursor-pointer shrink-0 ml-4">
-            <input
-              type="checkbox"
-              checked={vacationMode}
-              disabled={vacationPending}
-              onChange={(e) => {
-                const v = e.target.checked;
-                setVacationMode(v);
-                toggleVacation(v);
-              }}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500" />
-          </label>
-        </div>
-        {vacationMode && (
-          <div className="flex items-start gap-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 mt-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <p className="text-sm text-amber-800 dark:text-amber-400">
-              Your store is currently in vacation mode. Customers cannot see or purchase your products.
-            </p>
-          </div>
-        )}
-      </Section>
+      <VacationSection key={`vac-${settings.id ?? "loading"}`} settings={settings} />
 
       {/* Notifications */}
-      <Section title="Notification Preferences">
-        <div className="space-y-4">
-          {[
-            { id: "new_order",    label: "New Order",           desc: "When a customer places an order" },
-            { id: "order_status", label: "Order Status Updates", desc: "Delivery and tracking updates"   },
-            { id: "payout",       label: "Payout Notifications", desc: "When funds are transferred"     },
-            { id: "review",       label: "Product Reviews",     desc: "When customers leave reviews"    },
-            { id: "low_stock",    label: "Low Stock Alerts",    desc: "When stock falls below 5 units"  },
-          ].map(({ id, label, desc }) => (
-            <div key={id} className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{label}</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>
-              </div>
-              <label className="relative inline-flex cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={notifPrefs[id] ?? true}
-                  onChange={(e) => {
-                    const updated = { ...notifPrefs, [id]: e.target.checked };
-                    setNotifPrefs(updated);
-                    saveNotifPrefs(updated);
-                  }}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary" />
-              </label>
-            </div>
-          ))}
-        </div>
-      </Section>
+      <NotificationsSection key={`notif-${settings.id ?? "loading"}`} settings={settings} />
 
       {/* Size & option presets */}
       <VariantPresetsManager />
