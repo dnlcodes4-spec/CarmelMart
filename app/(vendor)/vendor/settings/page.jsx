@@ -190,7 +190,7 @@ function PickupSection({ settings }) {
             className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30 dark:bg-gray-700 dark:text-gray-100 dark:placeholder:text-gray-500"
           />
           <p className="text-xs text-gray-400 mt-1.5">
-            Landmarks help the rider find you once they arrive. The map pin is what guides them there.
+            Landmarks help the rider find you once they arrive. The map location is what gets them close.
           </p>
         </div>
         <div>
