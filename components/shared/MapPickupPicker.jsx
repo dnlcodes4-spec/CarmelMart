@@ -20,7 +20,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Crosshair, LocateFixed, Plus, Minus, Loader2, AlertCircle } from "lucide-react";
-import { panByPixels } from "@/lib/geo/mercator";
+import { panByPixels, pointerDistance, zoomForPinch } from "@/lib/geo/mercator";
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -30,6 +30,10 @@ const MIN_ZOOM = 4;
 const MAX_ZOOM = 18;
 const DEFAULT_ZOOM = 16; // close enough to distinguish buildings
 const HEIGHT = 280;
+// Map fetched beyond the frame on every side, so a drag reveals real map instead
+// of the empty background it used to expose.
+const PAD = 96;
+const MAX_STATIC = 1280; // Mapbox Static Images API limit per side
 
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
@@ -54,18 +58,22 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   const [zoom, setZoom] = useState(hasValue ? DEFAULT_ZOOM : initialCentre ? 11 : 5);
   const [width, setWidth] = useState(0);
   const [drag, setDrag] = useState(null);       // live pixel offset while dragging
+  const [painted, setPainted] = useState(null); // last image src known to be on screen
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState(null);
 
   const boxRef = useRef(null);
   const dragStart = useRef(null);
+  const pointers = useRef(new Map()); // every finger currently down
+  const pinch = useRef(null);         // { startDistance, startZoom } while pinching
 
   // Request the image at the element's own pixel width so one screen pixel is one
   // image pixel — otherwise every drag would be scaled and the pin would drift.
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const measure = () => setWidth(Math.min(1280, Math.round(el.clientWidth)));
+    // Leave room for the overscan so the fetched image never exceeds the API limit.
+    const measure = () => setWidth(Math.min(MAX_STATIC - PAD * 2, Math.round(el.clientWidth)));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -81,37 +89,76 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     onChange?.({ latitude: round6(next.lat), longitude: round6(next.lng) });
   }, [onChange]);
 
-  // ── Drag to pan ───────────────────────────────────────────────────────────
+  // ── Gestures ──────────────────────────────────────────────────────────────
+  // One finger pans, two pinch. Pointer Events give us both, but only if the
+  // element opts out of the browser's gesture handling — see touchAction below.
+
   const onPointerDown = (e) => {
     if (disabled) return;
-    dragStart.current = { x: e.clientX, y: e.clientY };
-    setDrag({ dx: 0, dy: 0 });
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     e.currentTarget.setPointerCapture?.(e.pointerId);
+
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = { startDistance: pointerDistance(a, b), startZoom: zoom };
+      // A second finger converts the gesture; the pan in progress is abandoned
+      // rather than committed, so pinching never nudges the point.
+      dragStart.current = null;
+      setDrag(null);
+      return;
+    }
+    if (pointers.current.size === 1) {
+      dragStart.current = { x: e.clientX, y: e.clientY };
+      setDrag({ dx: 0, dy: 0 });
+    }
   };
 
   const onPointerMove = (e) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pinch.current && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      setZoom(zoomForPinch(pinch.current.startZoom, pinch.current.startDistance,
+        pointerDistance(a, b), { min: MIN_ZOOM, max: MAX_ZOOM }));
+      return;
+    }
     if (!dragStart.current) return;
     setDrag({ dx: e.clientX - dragStart.current.x, dy: e.clientY - dragStart.current.y });
   };
 
-  const onPointerUp = () => {
+  /** @param {boolean} keep commit the gesture, or discard it */
+  const endPointer = (e, keep) => {
+    pointers.current.delete(e.pointerId);
+
+    if (pinch.current) {
+      if (pointers.current.size >= 2) return;
+      pinch.current = null;
+      // Belt and braces: onPointerDown already cleared this when the second
+      // finger landed, so a remaining finger cannot pan from a stale origin.
+      dragStart.current = null;
+      setDrag(null);
+      // The zoom already changed live; confirm the point as the choice.
+      if (keep && hasValue) onChange?.({ latitude: round6(center.lat), longitude: round6(center.lng) });
+      return;
+    }
+
     if (!dragStart.current || !drag) { dragStart.current = null; setDrag(null); return; }
-    commit(panByPixels(center.lng, center.lat, drag.dx, drag.dy, zoom));
+    if (keep) commit(panByPixels(center.lng, center.lat, drag.dx, drag.dy, zoom));
     dragStart.current = null;
     setDrag(null);
   };
+
+  const onPointerUp = (e) => endPointer(e, true);
 
   // A cancelled gesture must DISCARD, never commit. The browser fires
   // pointercancel when it claims a gesture for itself; treating that like a
   // finished drag saved a half-finished pan, so scrolling the page past the map
   // silently moved the vendor's pickup point.
-  const onPointerCancel = () => {
-    dragStart.current = null;
-    setDrag(null);
-  };
+  const onPointerCancel = (e) => endPointer(e, false);
 
   const changeZoom = (delta) => {
-    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom + delta));
+    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(zoom) + delta));
     setZoom(next);
     // Zooming does not move the point, but it does confirm it as the choice.
     if (hasValue) onChange?.({ latitude: round6(center.lat), longitude: round6(center.lng) });
@@ -147,11 +194,18 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     );
   }
 
+  // Overscan: fetch PAD extra pixels on every side and inset the image, so the
+  // frame always has map under it while the finger drags.
+  const imgW = width ? width + PAD * 2 : 0;
+  const imgH = HEIGHT + PAD * 2;
+  // Pinch produces a fractional zoom; trim it so tiny wobbles don't refetch.
+  const zoomParam = Math.round(zoom * 100) / 100;
   const src = width
     ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-      `${center.lng},${center.lat},${zoom},0/${width}x${HEIGHT}@2x` +
+      `${center.lng},${center.lat},${zoomParam},0/${imgW}x${imgH}@2x` +
       `?access_token=${TOKEN}&attribution=false&logo=false`
     : null;
+  const stale = painted && painted !== src ? painted : null;
 
   return (
     <div className="space-y-2">
@@ -171,17 +225,44 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
         onPointerCancel={onPointerCancel}
       >
         {src && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={src}
-            alt="Map around your pickup point"
-            width={width}
-            height={HEIGHT}
-            draggable={false}
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-            // Follow the finger during the drag; the real move commits on release.
-            style={drag ? { transform: `translate(${drag.dx}px, ${drag.dy}px)` } : undefined}
-          />
+          <div
+            className="pointer-events-none absolute"
+            style={{
+              left: -PAD,
+              top: -PAD,
+              width: imgW,
+              height: imgH,
+              // Follow the finger during the drag; the real move commits on release.
+              transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+            }}
+          >
+            {/* The tile already on screen, held until its replacement paints —
+                otherwise the frame goes blank on every pan over a slow connection. */}
+            {stale && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={stale}
+                alt=""
+                aria-hidden="true"
+                width={imgW}
+                height={imgH}
+                draggable={false}
+                className="absolute inset-0"
+              />
+            )}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={src}
+              alt="Map around your pickup point"
+              width={imgW}
+              height={imgH}
+              draggable={false}
+              onLoad={() => setPainted(src)}
+              className={`absolute inset-0 transition-opacity duration-200 ${
+                painted === src ? "opacity-100" : "opacity-0"
+              }`}
+            />
+          </div>
         )}
 
         {/* Fixed crosshair — the centre of the map is the chosen point. Easier to

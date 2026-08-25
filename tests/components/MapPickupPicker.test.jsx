@@ -23,6 +23,12 @@ beforeAll(() => {
     observe() {} unobserve() {} disconnect() {}
   };
   if (!globalThis.PointerEvent) globalThis.PointerEvent = globalThis.MouseEvent;
+  // jsdom reports every element as zero-width, which leaves the component with
+  // no image to render and makes the imagery assertions meaningless.
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() { return 400; },
+  });
 });
 
 const AT = { latitude: 6.5244, longitude: 3.3792 };
@@ -85,5 +91,113 @@ describe("touch gestures", () => {
     pointer(surface, "pointerMove", { x: 160, y: 100 });
     pointer(surface, "pointerUp", { x: 160, y: 100 });
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("pinch to zoom", () => {
+  /** Two fingers, `apart` pixels horizontally, centred on the same spot. */
+  const pinchTo = (surface, apart) => {
+    pointer(surface, "pointerMove", { x: 200 - apart / 2, y: 140, id: 1 });
+    pointer(surface, "pointerMove", { x: 200 + apart / 2, y: 140, id: 2 });
+  };
+
+  const startPinch = (surface, apart) => {
+    pointer(surface, "pointerDown", { x: 200 - apart / 2, y: 140, id: 1 });
+    pointer(surface, "pointerDown", { x: 200 + apart / 2, y: 140, id: 2 });
+  };
+
+  const zoomOf = (container) => {
+    const src = container.querySelector("img[src]")?.getAttribute("src") ?? "";
+    // .../static/<lng>,<lat>,<zoom>,0/<w>x<h>@2x
+    const m = src.match(/static\/[-\d.]+,[-\d.]+,([\d.]+),/);
+    return m ? Number(m[1]) : null;
+  };
+
+  it("zooms in when the fingers spread apart", () => {
+    const { surface, container } = setup();
+    const before = zoomOf(container);
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    expect(zoomOf(container)).toBeGreaterThan(before);
+  });
+
+  it("zooms out when the fingers come together", () => {
+    const { surface, container } = setup();
+    const before = zoomOf(container);
+    startPinch(surface, 200);
+    pinchTo(surface, 100);
+    expect(zoomOf(container)).toBeLessThan(before);
+  });
+
+  it("does not pan the map while pinching", () => {
+    const { surface, onChange } = setup();
+    startPinch(surface, 100);
+    onChange.mockClear();
+    pinchTo(surface, 240);
+    // Complete the gesture — a commit only happens on release, so stopping at
+    // pointermove would assert nothing at all.
+    pointer(surface, "pointerUp", { x: 320, y: 140, id: 2 });
+    pointer(surface, "pointerUp", { x: 80, y: 140, id: 1 });
+    const moved = onChange.mock.calls.some(
+      ([c]) => c.latitude !== AT.latitude || c.longitude !== AT.longitude,
+    );
+    expect(moved).toBe(false);
+  });
+
+  it("does not pan when the second finger lifts mid-gesture", () => {
+    const { surface, onChange } = setup();
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    pointer(surface, "pointerUp", { x: 300, y: 140, id: 2 });
+    onChange.mockClear();
+    // The remaining finger sweeps far; a stale drag origin would pan wildly.
+    pointer(surface, "pointerMove", { x: 20, y: 260, id: 1 });
+    pointer(surface, "pointerUp", { x: 20, y: 260, id: 1 });
+    const moved = onChange.mock.calls.some(
+      ([c]) => c.latitude !== AT.latitude || c.longitude !== AT.longitude,
+    );
+    expect(moved).toBe(false);
+  });
+});
+
+describe("map imagery", () => {
+  it("renders a map wider than its frame so a drag has real map to move into", () => {
+    const { container, surface } = setup();
+    const img = container.querySelector("img");
+    const frame = Number(String(surface.style.height).replace("px", ""));
+    expect(Number(img.getAttribute("height"))).toBeGreaterThan(frame);
+  });
+
+  it("keeps the previous map visible until the replacement has loaded", () => {
+    const { surface, container } = setup();
+    const first = container.querySelector("img");
+    const firstSrc = first.getAttribute("src");
+    fireEvent.load(first); // the first tile paints
+
+    pointer(surface, "pointerDown", { x: 100, y: 100 });
+    pointer(surface, "pointerMove", { x: 180, y: 100 });
+    pointer(surface, "pointerUp", { x: 180, y: 100 });
+
+    // The replacement has not fired onLoad, so the old tile must still be shown
+    // rather than the frame going blank.
+    const srcs = [...container.querySelectorAll("img")].map((i) => i.getAttribute("src"));
+    expect(srcs).toContain(firstSrc);
+    expect(srcs.some((s) => s !== firstSrc)).toBe(true);
+  });
+
+  it("drops the stale tile once the replacement has painted", () => {
+    const { surface, container } = setup();
+    const first = container.querySelector("img");
+    const firstSrc = first.getAttribute("src");
+    fireEvent.load(first);
+
+    pointer(surface, "pointerDown", { x: 100, y: 100 });
+    pointer(surface, "pointerMove", { x: 180, y: 100 });
+    pointer(surface, "pointerUp", { x: 180, y: 100 });
+
+    const fresh = [...container.querySelectorAll("img")].find((i) => i.getAttribute("src") !== firstSrc);
+    fireEvent.load(fresh);
+    const srcs = [...container.querySelectorAll("img")].map((i) => i.getAttribute("src"));
+    expect(srcs).not.toContain(firstSrc);
   });
 });
