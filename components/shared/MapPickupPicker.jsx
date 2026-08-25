@@ -101,6 +101,15 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     setDrag(null);
   };
 
+  // A cancelled gesture must DISCARD, never commit. The browser fires
+  // pointercancel when it claims a gesture for itself; treating that like a
+  // finished drag saved a half-finished pan, so scrolling the page past the map
+  // silently moved the vendor's pickup point.
+  const onPointerCancel = () => {
+    dragStart.current = null;
+    setDrag(null);
+  };
+
   const changeZoom = (delta) => {
     const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom + delta));
     setZoom(next);
@@ -151,11 +160,15 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
         className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gray-100 select-none ${
           disabled ? "opacity-60" : "cursor-grab active:cursor-grabbing"
         }`}
-        style={{ height: HEIGHT }}
+        // touchAction: none opts this element out of the browser's own gesture
+        // handling. Without it a phone treats the drag as a page scroll, stops
+        // sending pointermove and fires pointercancel — the map followed the
+        // finger for a few pixels and then died.
+        style={{ height: HEIGHT, touchAction: "none" }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerCancel={onPointerCancel}
       >
         {src && (
           // eslint-disable-next-line @next/next/no-img-element
