@@ -19,8 +19,9 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Crosshair, LocateFixed, Plus, Minus, Loader2, AlertCircle } from "lucide-react";
+import { Crosshair, LocateFixed, Plus, Minus, Loader2, AlertCircle, Search, Layers, MapPin, X } from "lucide-react";
 import { panByPixels, pointerDistance, zoomForPinch } from "@/lib/geo/mercator";
+import { sameState } from "@/lib/geo/nigeria";
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -35,6 +36,28 @@ const HEIGHT = 280;
 const PAD = 96;
 const MAX_STATIC = 1280; // Mapbox Static Images API limit per side
 
+const STYLES = {
+  // Street data outside Lagos is thin — often nothing on screen to recognise.
+  streets: { id: "streets-v12", label: "Map" },
+  // Satellite shows the actual roof and compound, which is what a vendor knows.
+  satellite: { id: "satellite-streets-v12", label: "Satellite" },
+};
+
+// A single view costs ~185KB at @2x on streets versus ~5KB at @1x, and every pan
+// refetches. That is real money on Nigerian mobile data, so ask for the retina
+// image only when the device wants it and the connection is not constrained.
+function wantsHiDpi() {
+  if (typeof window === "undefined") return false;
+  if ((window.devicePixelRatio ?? 1) < 2) return false;
+  const c = navigator.connection;
+  if (c?.saveData) return false;
+  if (c?.effectiveType && /(^|-)2g$|^3g$/.test(c.effectiveType)) return false;
+  return true;
+}
+
+/** Metres of GPS error beyond which a fix is too vague to accept unquestioned. */
+const ACCURACY_LIMIT_M = 150;
+
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
 /**
@@ -42,11 +65,14 @@ const round6 = (n) => Math.round(n * 1e6) / 1e6;
  * @param {object}  [props.value]        { latitude, longitude } already chosen
  * @param {Function} props.onChange      called with { latitude, longitude }
  * @param {object}  [props.initialCentre] where to open when nothing is chosen yet —
- *                                       e.g. the centre of the customer's state, so
+ *                                       e.g. the centre of the vendor's state, so
  *                                       they are not panning across the country
+ * @param {string}  [props.expectedState] the state we already believe they are in;
+ *                                       a point landing elsewhere is queried rather
+ *                                       than silently accepted
  * @param {boolean} [props.disabled]
  */
-export default function MapPickupPicker({ value = null, onChange, initialCentre = null, disabled = false }) {
+export default function MapPickupPicker({ value = null, onChange, initialCentre = null, expectedState = null, disabled = false }) {
   const hasValue = Number.isFinite(value?.latitude) && Number.isFinite(value?.longitude);
   const opening = hasValue
     ? { lng: value.longitude, lat: value.latitude }
@@ -59,6 +85,14 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   const [width, setWidth] = useState(0);
   const [drag, setDrag] = useState(null);       // live pixel offset while dragging
   const [painted, setPainted] = useState(null); // last image src known to be on screen
+  const [styleKey, setStyleKey] = useState("streets");
+  const [imgFailed, setImgFailed] = useState(false);
+  const [touched, setTouched] = useState(false);  // hide the hint once they engage
+  const [place, setPlace] = useState(null);       // { label, state } for the centre
+  const [accuracy, setAccuracy] = useState(null); // metres, from the last GPS fix
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState(null);
 
@@ -89,12 +123,75 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     onChange?.({ latitude: round6(next.lat), longitude: round6(next.lng) });
   }, [onChange]);
 
+  // ── Describing the chosen point ───────────────────────────────────────────
+  // Forward geocoding is what failed us: text in, wrong coordinates out. Reverse
+  // is the opposite operation and is reliable — a point always knows which
+  // region contains it. Used for display only and never stored, so the default
+  // (temporary) Mapbox terms are the correct ones here.
+  useEffect(() => {
+    if (!TOKEN || drag) return;   // don't chase the map while a finger is down
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(
+          `https://api.mapbox.com/search/geocode/v6/reverse?latitude=${center.lat}` +
+          `&longitude=${center.lng}&limit=1&access_token=${TOKEN}`,
+          { signal: ctrl.signal },
+        );
+        if (!r.ok) return;
+        const d = await r.json();
+        const f = d?.features?.[0]?.properties;
+        if (!f) { setPlace(null); return; }
+        setPlace({ label: f.full_address ?? f.name ?? null, state: f.context?.region?.name ?? null });
+      } catch { /* a description is a nicety; never surface a failure for it */ }
+    }, 700);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [center.lat, center.lng, drag]);
+
+  // ── Search, to move the map only ──────────────────────────────────────────
+  // The vendor still confirms visually against the crosshair, so a bad match is
+  // harmless here — it costs a drag, not a misrouted rider. That is what makes
+  // search usable for navigation even though it was unusable as a source of truth.
+  useEffect(() => {
+    const q = query.trim();
+    if (!TOKEN || q.length < 3) { setResults([]); return; }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await fetch(
+          `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}` +
+          `&country=ng&limit=5&autocomplete=true&access_token=${TOKEN}`,
+          { signal: ctrl.signal },
+        );
+        const d = r.ok ? await r.json() : null;
+        setResults((d?.features ?? []).map((f) => ({
+          id: f.properties?.mapbox_id ?? f.id,
+          label: f.properties?.full_address ?? f.properties?.name ?? "Unnamed place",
+          lng: f.geometry?.coordinates?.[0],
+          lat: f.geometry?.coordinates?.[1],
+        })).filter((x) => Number.isFinite(x.lat) && Number.isFinite(x.lng)));
+      } catch { /* leave the previous results rather than blanking the list */ }
+      finally { setSearching(false); }
+    }, 400);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [query]);
+
+  const jumpTo = (r) => {
+    setQuery("");
+    setResults([]);
+    setZoom(15);           // close, but wide enough to recognise the surroundings
+    setAccuracy(null);
+    commit({ lng: r.lng, lat: r.lat });
+  };
+
   // ── Gestures ──────────────────────────────────────────────────────────────
   // One finger pans, two pinch. Pointer Events give us both, but only if the
   // element opts out of the browser's gesture handling — see touchAction below.
 
   const onPointerDown = (e) => {
     if (disabled) return;
+    setTouched(true);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     e.currentTarget.setPointerCapture?.(e.pointerId);
 
@@ -157,6 +254,22 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   // silently moved the vendor's pickup point.
   const onPointerCancel = (e) => endPointer(e, false);
 
+  // Dragging is the only way to move the map, which leaves it unusable without a
+  // pointing device. Arrows nudge, +/- zoom.
+  const onKeyDown = (e) => {
+    if (disabled) return;
+    const STEP = e.shiftKey ? 120 : 40;
+    const nudge = { ArrowLeft: [STEP, 0], ArrowRight: [-STEP, 0], ArrowUp: [0, STEP], ArrowDown: [0, -STEP] }[e.key];
+    if (nudge) {
+      e.preventDefault();
+      setTouched(true);
+      commit(panByPixels(center.lng, center.lat, nudge[0], nudge[1], zoom));
+      return;
+    }
+    if (e.key === "+" || e.key === "=") { e.preventDefault(); changeZoom(1); }
+    if (e.key === "-" || e.key === "_") { e.preventDefault(); changeZoom(-1); }
+  };
+
   const changeZoom = (delta) => {
     const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(zoom) + delta));
     setZoom(next);
@@ -172,6 +285,7 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
       (pos) => {
         setLocating(false);
         setZoom(DEFAULT_ZOOM);
+        setAccuracy(pos.coords.accuracy ?? null);
         commit({ lng: pos.coords.longitude, lat: pos.coords.latitude });
       },
       (err) => {
@@ -200,15 +314,73 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   const imgH = HEIGHT + PAD * 2;
   // Pinch produces a fractional zoom; trim it so tiny wobbles don't refetch.
   const zoomParam = Math.round(zoom * 100) / 100;
+  const retina = wantsHiDpi() ? "@2x" : "";
   const src = width
-    ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/` +
-      `${center.lng},${center.lat},${zoomParam},0/${imgW}x${imgH}@2x` +
+    ? `https://api.mapbox.com/styles/v1/mapbox/${STYLES[styleKey].id}/static/` +
+      `${center.lng},${center.lat},${zoomParam},0/${imgW}x${imgH}${retina}` +
       `?access_token=${TOKEN}&attribution=false&logo=false`
     : null;
   const stale = painted && painted !== src ? painted : null;
 
+  const mismatch = place?.state && expectedState && !sameState(place.state, expectedState);
+  const vague = accuracy != null && accuracy > ACCURACY_LIMIT_M;
+
   return (
     <div className="space-y-2">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={query}
+            disabled={disabled}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search a landmark to jump there…"
+            aria-label="Search for a place to move the map"
+            className="w-full rounded-xl border border-gray-200 py-2.5 pl-9 pr-8 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 disabled:opacity-50"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => { setQuery(""); setResults([]); }}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {(results.length > 0 || searching) && (
+            <ul className="absolute z-10 mt-1 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+              {searching && results.length === 0 && (
+                <li className="px-3 py-2.5 text-xs text-gray-400">Searching…</li>
+              )}
+              {results.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => jumpTo(r)}
+                    className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-xs hover:bg-gray-50"
+                  >
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
+                    <span className="text-gray-700">{r.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setStyleKey((k) => (k === "streets" ? "satellite" : "streets"))}
+          aria-label={`Switch to ${styleKey === "streets" ? "satellite" : "map"} view`}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          <Layers className="h-3.5 w-3.5" />
+          {STYLES[styleKey === "streets" ? "satellite" : "streets"].label}
+        </button>
+      </div>
+
       <div
         ref={boxRef}
         className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gray-100 select-none ${
@@ -223,6 +395,10 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
+        onKeyDown={onKeyDown}
+        tabIndex={disabled ? -1 : 0}
+        role="application"
+        aria-label="Map. Use the arrow keys to move your pickup point, plus and minus to zoom."
       >
         {src && (
           <div
@@ -257,7 +433,8 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
               width={imgW}
               height={imgH}
               draggable={false}
-              onLoad={() => setPainted(src)}
+              onLoad={() => { setPainted(src); setImgFailed(false); }}
+              onError={() => setImgFailed(true)}
               className={`absolute inset-0 transition-opacity duration-200 ${
                 painted === src ? "opacity-100" : "opacity-0"
               }`}
@@ -279,16 +456,25 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
               disabled={disabled}
               onClick={() => changeZoom(delta)}
               aria-label={delta > 0 ? "Zoom in" : "Zoom out"}
-              className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/95 shadow-sm hover:bg-white disabled:opacity-50"
+              className="flex h-11 w-11 items-center justify-center rounded-lg bg-white/95 shadow-sm hover:bg-white disabled:opacity-50"
             >
               <Icon className="h-4 w-4 text-gray-700" />
             </button>
           ))}
         </div>
 
-        <p className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-1 text-[11px] font-medium text-white">
-          Drag the map so the crosshair sits on your shop
-        </p>
+        {!touched && (
+          <p className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-1 text-[11px] font-medium text-white">
+            Drag the map so the crosshair sits on your shop
+          </p>
+        )}
+
+        {imgFailed && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-50 p-4 text-center text-xs text-gray-600">
+            The map could not load here. Check your connection — or use
+            &ldquo;Use my current location&rdquo; below, which does not need it.
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -302,14 +488,39 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
           {locating ? "Finding you…" : "Use my current location"}
         </button>
 
-        {hasValue ? (
-          <span className="font-mono text-[11px] text-gray-500">
-            {round6(value.latitude)}, {round6(value.longitude)}
-          </span>
-        ) : (
-          <span className="text-[11px] text-gray-400">No pickup point set yet</span>
-        )}
+        {!hasValue && <span className="text-[11px] text-gray-400">No pickup point set yet</span>}
       </div>
+
+      {/* A vendor cannot check "6.925620, 3.755948". They can check a place name,
+          which is why the point is described back to them in words. */}
+      {hasValue && (
+        <p className="text-xs text-gray-600">
+          {place?.label
+            ? <>Riders will come to <span className="font-medium text-gray-900">{place.label}</span></>
+            : "Riders will come to the marked spot."}
+        </p>
+      )}
+
+      {mismatch && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            This spot looks like it is in <b>{place.state}</b>, but your shop is registered
+            in <b>{expectedState}</b>. Check the map before saving — a point in the wrong
+            state sends riders to the wrong city.
+          </span>
+        </p>
+      )}
+
+      {vague && (
+        <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Your phone could only place you within about {Math.round(accuracy)}m. Drag the
+            map onto your exact building before saving.
+          </span>
+        </p>
+      )}
 
       {locateError && (
         <p className="flex items-start gap-1.5 text-[11px] text-amber-700">

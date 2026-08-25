@@ -7,6 +7,7 @@ import { Save, AlertTriangle, RefreshCw, MapPin, CheckCircle2 } from "lucide-rea
 import { NIGERIAN_BANKS, getBankName } from "@/lib/nigerian-banks";
 import VariantPresetsManager from "@/components/shared/vendor/VariantPresetsManager";
 import MapPickupPicker from "@/components/shared/MapPickupPicker";
+import { stateCentre } from "@/lib/geo/nigeria";
 import { useAuth } from "@/lib/auth-context";
 import { updatePasswordAction } from "@/app/actions/auth";
 import toast from "react-hot-toast";
@@ -163,6 +164,8 @@ function PickupSection({ settings }) {
           </label>
           <MapPickupPicker
             value={hasCoords ? { latitude: coords.lat, longitude: coords.lng } : null}
+            initialCentre={stateCentre(settings.state)}
+            expectedState={settings.state ?? null}
             onChange={({ latitude, longitude }) => {
               setCoords({ lat: latitude, lng: longitude });
               setDirty(true);

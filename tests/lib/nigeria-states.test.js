@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from "vitest";
 import NaijaStates from "naija-state-local-government";
-import { stateCentre, NIGERIA_CENTRE } from "@/lib/geo/nigeria";
+import { stateCentre, NIGERIA_CENTRE, canonicalState, sameState } from "@/lib/geo/nigeria";
 
 describe("coverage", () => {
   it("has a centre for every state the picker can offer", () => {
@@ -58,5 +58,43 @@ describe("NIGERIA_CENTRE", () => {
   it("is a sane fallback when no state is chosen", () => {
     expect(NIGERIA_CENTRE.lat).toBeGreaterThan(7);
     expect(NIGERIA_CENTRE.lat).toBeLessThan(11);
+  });
+});
+
+describe("canonicalState", () => {
+  it("resolves the same state written different ways", () => {
+    expect(canonicalState("Lagos")).toBe(canonicalState("  LAGOS "));
+    expect(canonicalState("FCT Abuja")).toBe(canonicalState("FCT"));
+    expect(canonicalState("Abuja")).toBe(canonicalState("Federal Capital Territory"));
+    expect(canonicalState("Nassarawa")).toBe(canonicalState("Nasarawa"));
+  });
+
+  it("tolerates the 'State' suffix Mapbox sometimes returns", () => {
+    expect(canonicalState("Ogun State")).toBe(canonicalState("Ogun"));
+  });
+
+  it("returns null for anything it does not recognise", () => {
+    expect(canonicalState("Atlantis")).toBeNull();
+    expect(canonicalState("")).toBeNull();
+    expect(canonicalState(null)).toBeNull();
+  });
+});
+
+describe("sameState", () => {
+  it("matches a state against itself however it is spelled", () => {
+    expect(sameState("Ogun", "Ogun State")).toBe(true);
+    expect(sameState("FCT", "Abuja")).toBe(true);
+  });
+
+  it("separates genuinely different states — the Abeokuta/Lagos mix-up", () => {
+    expect(sameState("Ogun", "Lagos")).toBe(false);
+  });
+
+  it("does not claim a mismatch when either side is unknown", () => {
+    // An unrecognised name is missing information, not evidence of a problem;
+    // warning here would cry wolf at vendors whose state we never captured.
+    expect(sameState("Ogun", null)).toBe(true);
+    expect(sameState(null, "Lagos")).toBe(true);
+    expect(sameState("Ogun", "Atlantis")).toBe(true);
   });
 });

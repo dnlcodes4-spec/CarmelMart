@@ -20,6 +20,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { MapPin, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import MapPickupPicker from "@/components/shared/MapPickupPicker";
+import { stateCentre } from "@/lib/geo/nigeria";
 
 const fetchSettings = async () => {
   const r = await fetch("/api/vendor/settings");
@@ -85,7 +86,16 @@ export default function PickupPointPrompt({ enabled = true }) {
             on your door.
           </p>
 
-          <MapPickupPicker value={point} onChange={setPoint} disabled={save.isPending} />
+          {/* Open on the vendor's own state. Without this the map starts on the
+              centre of Nigeria at zoom 5 and they have to pan across the country
+              to find their shop — which is most of the reason nobody finished. */}
+          <MapPickupPicker
+            value={point}
+            onChange={setPoint}
+            initialCentre={stateCentre(data?.state)}
+            expectedState={data?.state ?? null}
+            disabled={save.isPending}
+          />
 
           <div className="mt-5 flex items-center justify-between gap-3">
             <button

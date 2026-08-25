@@ -39,10 +39,13 @@ function setup(props = {}) {
     <MapPickupPicker value={AT} onChange={onChange} {...props} />,
   );
   // The draggable surface is the element carrying the pointer handlers.
-  const surface = container.firstChild.firstChild;
+  // Selected by role rather than position: the surface is the interactive map,
+  // and a positional lookup silently pointed at the search bar the moment one
+  // was added above it.
+  const surface = container.querySelector('[role="application"]');
   // Guard against the token-missing fallback, which would make every gesture
   // assertion below pass for the wrong reason.
-  if (!surface || surface.tagName !== "DIV") throw new Error("map surface did not render");
+  if (!surface) throw new Error("map surface did not render");
   return { onChange, surface, container };
 }
 
