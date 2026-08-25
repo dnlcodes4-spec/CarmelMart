@@ -53,8 +53,10 @@ function subscribeDevice(onChange) {
 const CHECKS = [
   "Drag with one finger — the map should track your finger, not scroll the page",
   "Scroll the page by starting the swipe outside the map",
-  "Pinch with two fingers — zoom should be smooth, not stepped",
+  "Pinch with two fingers — the map should grow under your fingers immediately",
   "Lift one finger mid-pinch — the map must not jump",
+  "Tap “Bigger map” — the map should fill the screen and the page must not scroll behind it",
+  "Pinch and drag in the bigger map, then Done — your point should survive",
   "Tap “Use my current location” — check the accuracy warning if it appears",
   "Search a landmark and pick a result — the map jumps, you confirm by eye",
   "Switch to Satellite — can you recognise the building?",

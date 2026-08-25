@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Crosshair, LocateFixed, Plus, Minus, Loader2, AlertCircle, Search, Layers, MapPin, X } from "lucide-react";
+import { Crosshair, LocateFixed, Plus, Minus, Loader2, AlertCircle, Search, Layers, MapPin, X, Maximize2, Check } from "lucide-react";
 import { panByPixels, pointerDistance, zoomForPinch } from "@/lib/geo/mercator";
 import { sameState } from "@/lib/geo/nigeria";
 
@@ -90,6 +90,9 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   const [touched, setTouched] = useState(false);  // hide the hint once they engage
   const [place, setPlace] = useState(null);       // { label, state } for the centre
   const [accuracy, setAccuracy] = useState(null); // metres, from the last GPS fix
+  const [liveZoom, setLiveZoom] = useState(null); // zoom under the fingers, pre-commit
+  const [height, setHeight] = useState(HEIGHT);   // the frame grows in full-screen
+  const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -107,7 +110,10 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     const el = boxRef.current;
     if (!el) return;
     // Leave room for the overscan so the fetched image never exceeds the API limit.
-    const measure = () => setWidth(Math.min(MAX_STATIC - PAD * 2, Math.round(el.clientWidth)));
+    const measure = () => {
+      setWidth(Math.min(MAX_STATIC - PAD * 2, Math.round(el.clientWidth)));
+      setHeight(Math.min(MAX_STATIC - PAD * 2, Math.round(el.clientHeight) || HEIGHT));
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -177,6 +183,18 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [query]);
 
+  useEffect(() => {
+    if (!expanded) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onEsc = (e) => { if (e.key === "Escape") setExpanded(false); };
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.body.style.overflow = previous;
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [expanded]);
+
   const jumpTo = (r) => {
     setQuery("");
     setResults([]);
@@ -216,7 +234,10 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
 
     if (pinch.current && pointers.current.size >= 2) {
       const [a, b] = [...pointers.current.values()];
-      setZoom(zoomForPinch(pinch.current.startZoom, pinch.current.startDistance,
+      // Held in liveZoom rather than committed: `zoom` drives the image URL, so
+      // setting it here fetched a fresh map on every frame of the gesture. The
+      // pixels on screen are scaled instead, which is instant and free.
+      setLiveZoom(zoomForPinch(pinch.current.startZoom, pinch.current.startDistance,
         pointerDistance(a, b), { min: MIN_ZOOM, max: MAX_ZOOM }));
       return;
     }
@@ -235,7 +256,10 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
       // finger landed, so a remaining finger cannot pan from a stale origin.
       dragStart.current = null;
       setDrag(null);
-      // The zoom already changed live; confirm the point as the choice.
+      // Settle: adopt the pinched zoom, which triggers the single fetch for the
+      // whole gesture, and drop the temporary scale.
+      if (keep && liveZoom != null) setZoom(liveZoom);
+      setLiveZoom(null);
       if (keep && hasValue) onChange?.({ latitude: round6(center.lat), longitude: round6(center.lng) });
       return;
     }
@@ -311,7 +335,7 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   // Overscan: fetch PAD extra pixels on every side and inset the image, so the
   // frame always has map under it while the finger drags.
   const imgW = width ? width + PAD * 2 : 0;
-  const imgH = HEIGHT + PAD * 2;
+  const imgH = height + PAD * 2;
   // Pinch produces a fractional zoom; trim it so tiny wobbles don't refetch.
   const zoomParam = Math.round(zoom * 100) / 100;
   const retina = wantsHiDpi() ? "@2x" : "";
@@ -325,8 +349,8 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
   const mismatch = place?.state && expectedState && !sameState(place.state, expectedState);
   const vague = accuracy != null && accuracy > ACCURACY_LIMIT_M;
 
-  return (
-    <div className="space-y-2">
+  const body = (
+    <>
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -383,14 +407,14 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
 
       <div
         ref={boxRef}
-        className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gray-100 select-none ${
-          disabled ? "opacity-60" : "cursor-grab active:cursor-grabbing"
-        }`}
+        className={`relative select-none overflow-hidden border-gray-200 bg-gray-100 ${
+          expanded ? "min-h-0 flex-1 border-y" : "rounded-xl border"
+        } ${disabled ? "opacity-60" : "cursor-grab active:cursor-grabbing"}`}
         // touchAction: none opts this element out of the browser's own gesture
         // handling. Without it a phone treats the drag as a page scroll, stops
         // sending pointermove and fires pointercancel — the map followed the
         // finger for a few pixels and then died.
-        style={{ height: HEIGHT, touchAction: "none" }}
+        style={{ height: expanded ? undefined : HEIGHT, touchAction: "none" }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -408,8 +432,12 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
               top: -PAD,
               width: imgW,
               height: imgH,
-              // Follow the finger during the drag; the real move commits on release.
-              transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+              // Follow the fingers during the gesture; the real move and the real
+              // zoom both commit on release. Doubling the zoom doubles the scale.
+              transform: [
+                drag ? `translate(${drag.dx}px, ${drag.dy}px)` : null,
+                liveZoom != null ? `scale(${2 ** (liveZoom - zoom)})` : null,
+              ].filter(Boolean).join(" ") || undefined,
             }}
           >
             {/* The tile already on screen, held until its replacement paints —
@@ -478,6 +506,17 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        {!expanded && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            disabled={disabled}
+            aria-label="Open a bigger map"
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3.5 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <Maximize2 className="h-3.5 w-3.5" /> Bigger map
+          </button>
+        )}
         <button
           type="button"
           onClick={locate}
@@ -528,6 +567,34 @@ export default function MapPickupPicker({ value = null, onChange, initialCentre 
           {locateError}
         </p>
       )}
-    </div>
+    </>
   );
+
+  // Full screen is not decoration: a map inside a scrolling page competes with
+  // that page for every vertical drag, and 280px is too small to aim at a
+  // building. Taking over the screen removes the competition and the squint.
+  if (expanded) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose your pickup point"
+        className="fixed inset-0 z-[70] flex flex-col gap-2 bg-white p-3 dark:bg-gray-900"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-bold text-gray-900 dark:text-gray-100">Where should riders collect?</p>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-bold text-white"
+          >
+            <Check className="h-3.5 w-3.5" /> Done
+          </button>
+        </div>
+        {body}
+      </div>
+    );
+  }
+
+  return <div className="space-y-2">{body}</div>;
 }

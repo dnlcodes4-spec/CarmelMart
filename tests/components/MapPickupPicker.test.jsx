@@ -116,11 +116,19 @@ describe("pinch to zoom", () => {
     return m ? Number(m[1]) : null;
   };
 
+  // The requested zoom settles on release, not mid-gesture — see "pinch cost and
+  // feedback" below for why the map is no longer refetched on every frame.
+  const liftBoth = (surface) => {
+    pointer(surface, "pointerUp", { x: 300, y: 140, id: 2 });
+    pointer(surface, "pointerUp", { x: 100, y: 140, id: 1 });
+  };
+
   it("zooms in when the fingers spread apart", () => {
     const { surface, container } = setup();
     const before = zoomOf(container);
     startPinch(surface, 100);
     pinchTo(surface, 200);
+    liftBoth(surface);
     expect(zoomOf(container)).toBeGreaterThan(before);
   });
 
@@ -129,6 +137,7 @@ describe("pinch to zoom", () => {
     const before = zoomOf(container);
     startPinch(surface, 200);
     pinchTo(surface, 100);
+    liftBoth(surface);
     expect(zoomOf(container)).toBeLessThan(before);
   });
 
@@ -202,5 +211,124 @@ describe("map imagery", () => {
     fireEvent.load(fresh);
     const srcs = [...container.querySelectorAll("img")].map((i) => i.getAttribute("src"));
     expect(srcs).not.toContain(firstSrc);
+  });
+});
+
+describe("pinch cost and feedback", () => {
+  const startPinch = (surface, apart) => {
+    pointer(surface, "pointerDown", { x: 200 - apart / 2, y: 140, id: 1 });
+    pointer(surface, "pointerDown", { x: 200 + apart / 2, y: 140, id: 2 });
+  };
+  const pinchTo = (surface, apart) => {
+    pointer(surface, "pointerMove", { x: 200 - apart / 2, y: 140, id: 1 });
+    pointer(surface, "pointerMove", { x: 200 + apart / 2, y: 140, id: 2 });
+  };
+  const endPinch = (surface, apart) => {
+    pointer(surface, "pointerUp", { x: 200 + apart / 2, y: 140, id: 2 });
+    pointer(surface, "pointerUp", { x: 200 - apart / 2, y: 140, id: 1 });
+  };
+  const srcOf = (c) => c.querySelector("img")?.getAttribute("src");
+  const layer = (c) => c.querySelector("img")?.parentElement;
+
+  it("fetches no new map while the fingers are still moving", () => {
+    // Each fetch is up to ~185KB. Refetching per pointermove made a one-second
+    // pinch cost megabytes and lag behind the fingers.
+    const { surface, container } = setup();
+    const before = srcOf(container);
+    startPinch(surface, 100);
+    pinchTo(surface, 140);
+    pinchTo(surface, 180);
+    pinchTo(surface, 220);
+    expect(srcOf(container)).toBe(before);
+  });
+
+  it("scales what is already on screen so the pinch is felt immediately", () => {
+    const { surface, container } = setup();
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    expect(layer(container).style.transform).toMatch(/scale\(/);
+  });
+
+  it("scales up when spreading and down when closing", () => {
+    const { surface, container } = setup();
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    const grown = Number(layer(container).style.transform.match(/scale\(([\d.]+)\)/)[1]);
+    expect(grown).toBeGreaterThan(1.5);
+
+    endPinch(surface, 200);
+    startPinch(surface, 200);
+    pinchTo(surface, 100);
+    const shrunk = Number(layer(container).style.transform.match(/scale\(([\d.]+)\)/)[1]);
+    expect(shrunk).toBeLessThan(1);
+  });
+
+  it("fetches the new zoom exactly once, when the fingers lift", () => {
+    const { surface, container } = setup();
+    const before = srcOf(container);
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    endPinch(surface, 200);
+    expect(srcOf(container)).not.toBe(before);
+  });
+
+  it("drops the temporary scale once the real map has been requested", () => {
+    const { surface, container } = setup();
+    startPinch(surface, 100);
+    pinchTo(surface, 200);
+    endPinch(surface, 200);
+    expect(layer(container).style.transform ?? "").not.toMatch(/scale\(/);
+  });
+});
+
+describe("full-screen map mode", () => {
+  const openBtn = (c) => [...c.querySelectorAll("button")]
+    .find((b) => /full|bigger|expand/i.test(b.textContent + (b.getAttribute("aria-label") ?? "")));
+
+  it("offers a way into a bigger map", () => {
+    const { container } = setup();
+    expect(openBtn(container)).toBeTruthy();
+  });
+
+  it("takes over the screen when opened", () => {
+    const { container } = setup();
+    fireEvent.click(openBtn(container));
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy();
+  });
+
+  it("locks the page behind it so the map cannot fight the page scroll", () => {
+    const { container } = setup();
+    fireEvent.click(openBtn(container));
+    expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  it("gives the page its scroll back on close", () => {
+    const { container } = setup();
+    fireEvent.click(openBtn(container));
+    const done = [...container.querySelectorAll("button")].find((b) => /done/i.test(b.textContent));
+    fireEvent.click(done);
+    expect(document.body.style.overflow).not.toBe("hidden");
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("closes on Escape", () => {
+    const { container } = setup();
+    fireEvent.click(openBtn(container));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("keeps the point chosen in full screen after closing", () => {
+    const { container, onChange } = setup();
+    fireEvent.click(openBtn(container));
+    const surface = container.querySelector('[role="application"]');
+    pointer(surface, "pointerDown", { x: 100, y: 100 });
+    pointer(surface, "pointerMove", { x: 190, y: 130 });
+    pointer(surface, "pointerUp", { x: 190, y: 130 });
+    const last = onChange.mock.calls.at(-1)[0];
+    const done = [...container.querySelectorAll("button")].find((b) => /done/i.test(b.textContent));
+    fireEvent.click(done);
+    expect(last.latitude).toBeDefined();
+    expect(onChange.mock.calls.at(-1)[0]).toEqual(last);
   });
 });
