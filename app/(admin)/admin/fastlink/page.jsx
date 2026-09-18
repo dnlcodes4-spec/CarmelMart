@@ -16,6 +16,64 @@ import { MapPin, Package, Phone, CheckCircle2, Loader2, AlertTriangle } from "lu
 import toast from "react-hot-toast";
 import MapPickupPicker from "@/components/shared/MapPickupPicker";
 
+const fetchDeliveries = async () => {
+  const r = await fetch("/api/admin/fastlink/deliveries");
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Failed to load deliveries");
+  return d;
+};
+
+/**
+ * Deliveries Fast Link could not complete. These orders were deliberately left
+ * alone by the webhook — the provider cancels for operational reasons and the
+ * order is usually still deliverable, so the choice between re-dispatching,
+ * sending an in-house rider, and cancelling with a refund sits here.
+ */
+function ReviewQueue() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin-fastlink-deliveries"],
+    queryFn: fetchDeliveries,
+    retry: false,
+  });
+  const rows = data?.deliveries ?? [];
+  if (isLoading || rows.length === 0) return null;
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-lg font-bold text-gray-900 dark:text-gray-100">
+        <AlertTriangle className="h-5 w-5 text-amber-500" /> Deliveries needing a decision
+        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">{rows.length}</span>
+      </h2>
+      <p className="mt-1 max-w-2xl text-xs text-gray-500 dark:text-gray-400">
+        These orders have <b>not</b> been cancelled — the delivery failed, not the sale.
+        Re-dispatch, send an in-house rider, or cancel the order from the order page, which
+        refunds the wallet and emails the customer.
+      </p>
+      <ul className="mt-3 space-y-2">
+        {rows.map((d) => (
+          <li key={d.orderId} className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{d.title}</p>
+              <span className="font-mono text-[11px] text-gray-500">order {String(d.orderId).slice(0, 8)}</span>
+            </div>
+            <p className="mt-1 text-xs text-gray-700 dark:text-gray-300">
+              {d.reason ? <>Provider said: <b>{d.reason}</b></> : <>No reason given by the provider.</>}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-500">
+              Order is still <b>{d.orderStatus}</b>
+              {d.customerName ? <> · {d.customerName}</> : null}
+              {d.customerPhone ? <> · <a className="underline" href={`tel:${d.customerPhone}`}>{d.customerPhone}</a></> : null}
+            </p>
+            <a href={`/admin/orders/${d.orderId}`} className="mt-2 inline-block text-xs font-semibold text-primary hover:underline">
+              Open order →
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 const fetchPending = async () => {
   const r = await fetch("/api/admin/fastlink/pickup");
   const d = await r.json();
@@ -74,6 +132,10 @@ export default function AdminPickupPointsPage() {
         their orders fall back to zone pricing and an in-house rider. Those with active
         products are listed first; they are the only ones this currently blocks.
       </p>
+
+      <ReviewQueue />
+
+      <ReviewQueue />
 
       {data && (
         <div className="mt-5 flex flex-wrap gap-3">

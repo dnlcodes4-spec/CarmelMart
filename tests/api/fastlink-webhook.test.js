@@ -244,3 +244,36 @@ describe("order lookup", () => {
     expect(adminClient.updates).toHaveLength(0);
   });
 });
+
+describe("a cancelled delivery is not a cancelled order", () => {
+  it("does not cancel the customer's order", async () => {
+    // Fast Link cancels for operational reasons and the order is usually still
+    // deliverable another way. Flipping it to cancelled took a paid order away
+    // with no refund, no reason and no email — none of which the webhook does.
+    const res = await POST(makeRequest(event("cancelled")));
+    expect(res.status).toBe(200);
+    expect(adminClient.updates).toHaveLength(1);
+    expect(adminClient.updates.at(-1).values.status).toBeUndefined();
+  });
+
+  it("still records the delivery as cancelled", async () => {
+    await POST(makeRequest(event("cancelled")));
+    expect(adminClient.updates.at(-1).values.fastlink_status).toBe("cancelled");
+  });
+
+  it("records the event so the reason survives for whoever picks it up", async () => {
+    await POST(makeRequest(event("cancelled", { cancellation_reason: "No rider available" })));
+    expect(adminClient.events).toHaveLength(1);
+    const ev = adminClient.events[0];
+    expect(ev.fastlink_status).toBe("cancelled");
+    expect(ev.payload?.data?.cancellation_reason ?? ev.payload?.cancellation_reason)
+      .toBe("No rider available");
+  });
+
+  it("still applies ordinary progress automatically", async () => {
+    // The guard must be narrow — a normal delivery should need no human at all.
+    const res = await POST(makeRequest(event("in_transit")));
+    expect(res.status).toBe(200);
+    expect(adminClient.updates.at(-1).values.status).toBe("shipped");
+  });
+});

@@ -23,7 +23,7 @@ import {
   FASTLINK_SIGNATURE_HEADER,
   FASTLINK_EVENT_HEADER,
 } from "@/lib/fastlink/webhook";
-import { toCarmelStatus, isIssueStatus, TERMINAL_CARMEL_STATUSES } from "@/lib/fastlink/status";
+import { toCarmelStatus, isIssueStatus, needsReview, TERMINAL_CARMEL_STATUSES } from "@/lib/fastlink/status";
 
 const HANDLED_EVENTS = new Set(["order.created", "order.status_changed", "order.assigned"]);
 
@@ -104,10 +104,18 @@ export async function POST(request) {
 
     // An unmapped status is recorded but never guessed at — better a stale carmel
     // status than a wrong one.
+    //
+    // Statuses needing review are recorded but never applied. A Fast Link
+    // cancellation is the case that matters: they cancel for operational reasons
+    // and the order is usually still deliverable another way, so applying it
+    // took a paid customer's order away with no refund, no reason and no email —
+    // none of which this route does. Cancelling and refunding belongs to the
+    // cancel route, which credits the wallet and tells both sides.
     const carmelStatus = toCarmelStatus(fastlinkStatus);
     if (
       carmelStatus &&
       carmelStatus !== order.status &&
+      !needsReview(fastlinkStatus) &&
       !TERMINAL_CARMEL_STATUSES.has(order.status)
     ) {
       update.status = carmelStatus;
