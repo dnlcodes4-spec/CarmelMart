@@ -72,7 +72,11 @@ export async function POST(request) {
       return NextResponse.json({ received: true, ignored: event ?? null });
     }
 
-    // Fast Link nests the order under `data`; tolerate a flat body too.
+    // Observed against a real delivery on 2026-09-18: the body is the order
+    // object FLAT — no `data` wrapper and no `event` field, despite the docs
+    // showing both. The event type arrives only in X-FastLink-Event. Keep the
+    // `data` branch: it costs nothing and their docs may yet describe a future
+    // shape.
     const data = payload?.data ?? payload;
     const fastlinkOrderId = data?.id != null ? String(data.id) : null;
     const platformOrderId = data?.platform_order_id ?? null;
