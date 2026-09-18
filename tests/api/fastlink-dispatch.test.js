@@ -123,6 +123,35 @@ describe("dispatchOrder", () => {
   });
 });
 
+describe("reading the id from the create response", () => {
+  /** Observed shape: { detail: "Order created successfully.", order: { id } }. */
+  function makeNestedCreate() {
+    globalThis.fetch = vi.fn(async (input, init = {}) => {
+      sent.push({ url: input.toString(), method: init.method ?? "GET" });
+      const body = init.method === "POST"
+        ? { detail: "Order created successfully.", order: { id: 4228, status: "pending" } }
+        : { count: 0, results: [] };
+      return {
+        ok: true, status: 201, statusText: "Created",
+        headers: { get: () => "application/json" },
+        json: async () => body, text: async () => JSON.stringify(body),
+      };
+    });
+  }
+
+  it("reads the id nested under `order`", async () => {
+    makeNestedCreate();
+    const result = await dispatchOrder(makeAdmin(), ORDER.id);
+    expect(result.fastlinkOrderId).toBe("4228");
+  });
+
+  it("does not waste a lookup when the id was already returned", async () => {
+    makeNestedCreate();
+    await dispatchOrder(makeAdmin(), ORDER.id);
+    expect(sent.filter((s) => s.method === "GET")).toHaveLength(0);
+  });
+});
+
 describe("resolving the Fast Link order id", () => {
   /** Their create returns 201 with an empty body, so the client yields null. */
   function makeSilentCreate({ lookup = { count: 1, results: [{ id: 4220 }] } } = {}) {
