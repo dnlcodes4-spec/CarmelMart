@@ -663,8 +663,8 @@ export default function CheckoutPage() {
                       what helps them find the door once they arrive.
                       Keyed on state so picking one re-centres the map. */}
                   <Field
-                    label="Pin your delivery location"
-                    hint="Drag the map so the crosshair sits on your building. This sets your delivery fee and guides the rider."
+                    label="Show us where to deliver"
+                    hint="Drag the map until the crosshair sits on your building. This sets your delivery fee and guides the rider to your door."
                   >
                     <MapPickupPicker
                       key={address.state || "no-state"}
@@ -677,13 +677,13 @@ export default function CheckoutPage() {
                     />
                     {address.lat != null && address.lng != null ? (
                       <p className="text-xs text-green-600 flex items-center gap-1 mt-1.5">
-                        <CheckCircle className="w-3.5 h-3.5" /> Delivery location pinned
+                        <CheckCircle className="w-3.5 h-3.5" /> Delivery location saved
                       </p>
                     ) : (
                       <p className="text-xs text-gray-500 mt-1.5">
                         {address.state
-                          ? "Pin your location for accurate delivery pricing."
-                          : "Choose your state below, then pin your exact location."}
+                          ? "Mark your location so we can price delivery accurately."
+                          : "Choose your state below, then mark your exact location."}
                       </p>
                     )}
                   </Field>

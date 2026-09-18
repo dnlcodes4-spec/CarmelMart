@@ -7,7 +7,7 @@
  * it is pure and tested rather than buried in a component.
  */
 import { describe, it, expect } from "vitest";
-import { lngLatToWorld, worldToLngLat, panByPixels, clampLat, MAX_LAT } from "@/lib/geo/mercator";
+import { lngLatToWorld, worldToLngLat, panByPixels, clampLat, MAX_LAT , zoomForPinch, pointerDistance } from "@/lib/geo/mercator";
 
 const close = (a, b, tol = 1e-6) => Math.abs(a - b) < tol;
 
@@ -98,5 +98,47 @@ describe("clampLat", () => {
   it("clamps beyond the Mercator limit at both poles", () => {
     expect(clampLat(89)).toBe(MAX_LAT);
     expect(clampLat(-89)).toBe(-MAX_LAT);
+  });
+});
+
+describe("zoomForPinch", () => {
+  it("holds the zoom when the fingers have not moved", () => {
+    expect(zoomForPinch(14, 200, 200)).toBe(14);
+  });
+
+  it("gains a whole zoom level when the fingers double their separation", () => {
+    expect(zoomForPinch(14, 100, 200)).toBeCloseTo(15, 6);
+  });
+
+  it("loses a whole level when the fingers halve their separation", () => {
+    expect(zoomForPinch(14, 200, 100)).toBeCloseTo(13, 6);
+  });
+
+  it("moves smoothly rather than in steps — a pinch should not feel notched", () => {
+    const z = zoomForPinch(14, 100, 141.42);
+    expect(z).toBeGreaterThan(14.4);
+    expect(z).toBeLessThan(14.6);
+  });
+
+  it("respects the zoom limits so the map cannot be pinched past what Mapbox serves", () => {
+    expect(zoomForPinch(17, 10, 10000, { min: 4, max: 18 })).toBe(18);
+    expect(zoomForPinch(5, 10000, 10, { min: 4, max: 18 })).toBe(4);
+  });
+
+  it("holds the zoom rather than exploding when a distance is zero or missing", () => {
+    expect(zoomForPinch(14, 0, 200)).toBe(14);
+    expect(zoomForPinch(14, 200, 0)).toBe(14);
+    expect(zoomForPinch(14, undefined, 200)).toBe(14);
+  });
+});
+
+describe("pointerDistance", () => {
+  it("measures a 3-4-5 triangle", () => {
+    expect(pointerDistance({ x: 0, y: 0 }, { x: 3, y: 4 })).toBe(5);
+  });
+
+  it("is zero for the same point and never negative", () => {
+    expect(pointerDistance({ x: 7, y: 7 }, { x: 7, y: 7 })).toBe(0);
+    expect(pointerDistance({ x: 5, y: 0 }, { x: 0, y: 0 })).toBe(5);
   });
 });
