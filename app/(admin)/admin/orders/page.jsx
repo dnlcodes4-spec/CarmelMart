@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ShoppingCart, Download, RefreshCw, RotateCcw, X, Bike, ChevronDown, Package, MapPin, User, CreditCard, Eye } from "lucide-react";
+import { ShoppingCart, Download, RefreshCw, RotateCcw, X, Bike, ChevronDown, Package, MapPin, User, CreditCard, Eye, AlertTriangle } from "lucide-react";
+import { needsReview, describeIssue } from "@/lib/fastlink/status";
 import Image from "next/image";
 import toast from "react-hot-toast";
 
@@ -36,6 +37,23 @@ const STATUS_CFG = {
   cancelled: { label: "Cancelled", cls: "bg-red-50    text-red-700    border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"     },
   refunded:  { label: "Refunded",  cls: "bg-gray-100  text-gray-600   border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600"    },
 };
+
+/**
+ * Shown when the delivery failed but the order did not. The webhook deliberately
+ * leaves orders.status alone for these, so without a marker here an order whose
+ * delivery was cancelled looks completely healthy in this list.
+ */
+function DeliveryFlag({ fastlinkStatus }) {
+  if (!needsReview(fastlinkStatus)) return null;
+  return (
+    <span
+      title={describeIssue(fastlinkStatus)?.title ?? "Delivery needs attention"}
+      className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800"
+    >
+      <AlertTriangle className="h-3 w-3" /> Delivery
+    </span>
+  );
+}
 
 function StatusBadge({ status }) {
   const c = STATUS_CFG[status] ?? { label: status, cls: "bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600" };
@@ -473,7 +491,7 @@ export default function AdminOrdersPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <p className="font-bold text-gray-900 dark:text-gray-100 text-sm">{o.shortId}</p>
-                      <StatusBadge status={o.status} />
+                      <StatusBadge status={o.status} /><DeliveryFlag fastlinkStatus={o.fastlink_status} />
                     </div>
                     <p className="text-sm text-gray-700 dark:text-gray-300 mb-0.5">{o.customer}</p>
                     <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
@@ -547,7 +565,7 @@ export default function AdminOrdersPage() {
                       {o.phone && <p className="text-xs text-gray-400 dark:text-gray-500">{o.phone}</p>}
                     </td>
                     <td className="px-5 py-4 text-right font-bold text-gray-900 dark:text-gray-100">₦{(o.total || 0).toLocaleString()}</td>
-                    <td className="px-5 py-4"><StatusBadge status={o.status} /></td>
+                    <td className="px-5 py-4"><StatusBadge status={o.status} /><DeliveryFlag fastlinkStatus={o.fastlink_status} /></td>
                     <td className="px-5 py-4 hidden md:table-cell">
                       {o.rider_name ? (
                         <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">

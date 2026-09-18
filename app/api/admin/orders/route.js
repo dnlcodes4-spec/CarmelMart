@@ -19,7 +19,7 @@ export async function GET(request) {
 
     let query = admin
       .from("orders")
-      .select("id, customer_id, rider_id, status, total, created_at, delivery_address", { count: "exact" })
+      .select("id, customer_id, rider_id, status, total, created_at, delivery_address, fastlink_status", { count: "exact" })
       .order("created_at", { ascending: false })
       .range((page - 1) * limit, page * limit - 1);
 
