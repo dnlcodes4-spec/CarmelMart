@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendOrderConfirmation, sendVendorNewOrder } from "@/lib/email";
 import { quoteShippingForItems } from "@/lib/fastlink/shipping";
+import { undeliverableVendors, describeUndeliverable } from "@/lib/fastlink/coverage";
 import { dispatchOrder } from "@/lib/fastlink/orders";
 import { isIssueStatus } from "@/lib/fastlink/status";
 
@@ -265,6 +266,22 @@ export async function POST(request) {
     let deliveryFee = toPositiveInt(delivery_address?.delivery_fee, 0);
     const hasPhysical = orderItems.some((i) => i.delivery_format !== "digital");
     if (hasPhysical) {
+      // Refuse the sale rather than take money for a delivery nobody can make.
+      // Fast Link is the only carrier now, and it accepts an order for a merchant
+      // with no pickup point without complaint — so this is the only place the
+      // customer can be stopped before paying.
+      const blocked = await undeliverableVendors(
+        admin,
+        orderItems.filter((i) => i.delivery_format !== "digital").map((i) => i.vendor_id),
+      );
+      if (blocked.length > 0) {
+        return NextResponse.json(
+          { error: describeUndeliverable(blocked), code: "vendor_not_deliverable",
+            vendors: blocked.map((v) => v.id) },
+          { status: 409 },
+        );
+      }
+
       const quote = await quoteShippingForItems({ admin, destination: delivery_address, items: orderItems });
       if (!quote.fallback) deliveryFee = quote.totalFee;
     }

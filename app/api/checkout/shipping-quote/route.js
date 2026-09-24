@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { quoteShippingForItems } from "@/lib/fastlink/shipping";
+import { undeliverableVendors, describeUndeliverable } from "@/lib/fastlink/coverage";
 
 export async function POST(request) {
   let body;
@@ -24,11 +25,30 @@ export async function POST(request) {
   }
 
   const admin = createAdminClient();
+
+  // Surfaced separately from pricing: a vendor with no pickup point is not a
+  // quote that failed, it is a sale we cannot fulfil. Checkout needs to say so
+  // before the customer reaches the pay button, rather than at order creation.
+  const blocked = await undeliverableVendors(
+    admin,
+    (Array.isArray(body.items) ? body.items : []).map((i) => i?.vendorId ?? i?.vendor_id),
+  );
+  if (blocked.length > 0) {
+    return NextResponse.json({
+      ok: true,
+      fallback: true,
+      reason: "vendor_not_deliverable",
+      deliverable: false,
+      message: describeUndeliverable(blocked),
+      vendors: blocked.map((v) => v.id),
+    });
+  }
+
   const result = await quoteShippingForItems({
     admin,
     destination: body.destination,
     items: body.items,
   });
 
-  return NextResponse.json({ ok: true, ...result });
+  return NextResponse.json({ ok: true, deliverable: true, ...result });
 }

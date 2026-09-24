@@ -46,8 +46,9 @@ function ReviewQueue() {
       </h2>
       <p className="mt-1 max-w-2xl text-xs text-gray-500 dark:text-gray-400">
         These orders have <b>not</b> been cancelled — the delivery failed, not the sale.
-        Re-dispatch, send an in-house rider, or cancel the order from the order page, which
-        refunds the wallet and emails the customer.
+        Fast Link is the only carrier, so the options are to re-dispatch once the problem is
+        resolved, arrange collection directly with the seller, or cancel the order from the
+        order page, which refunds the wallet and emails the customer.
       </p>
       <ul className="mt-3 space-y-2">
         {rows.map((d) => (

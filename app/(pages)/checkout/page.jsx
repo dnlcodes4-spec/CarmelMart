@@ -4,25 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import Script from "next/script";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  MapPin,
-  CreditCard,
-  Truck,
-  ChevronRight,
-  CheckCircle,
-  ShieldCheck,
-  Phone,
-  User,
-  Home,
-  Landmark,
-  Tag,
-  X,
-  Mail,
-  UserCircle,
-  Download,
-  AlertTriangle,
-  RefreshCw,
-} from "lucide-react";
+import { MapPin, CreditCard, Truck, ChevronRight, CheckCircle, ShieldCheck, Phone, User, Home, Landmark, Tag, X, Mail, UserCircle, Download, AlertTriangle, RefreshCw, AlertCircle } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -219,7 +201,10 @@ export default function CheckoutPage() {
   // Fast Link live shipping quote (per-vendor, summed). Runs once we have
   // destination coordinates; degrades to the zone-based fee on any fallback.
   const cartKey = items.map((i) => `${i.vendorId}:${i.quantity}`).join(",");
-  const canQuote = !isAllDigital && address.lat != null && address.lng != null && items.length > 0;
+  // Pricing needs a destination, but deliverability does not: a seller with no
+  // collection point cannot be reached from anywhere. Asking as soon as there is
+  // a physical cart means we can say so before the address is even filled in.
+  const canQuote = !isAllDigital && items.length > 0;
   const { data: flQuote, isFetching: quoteLoading } = useQuery({
     queryKey: ["shipping-quote", address.lat, address.lng, cartKey],
     queryFn: () =>
@@ -234,6 +219,12 @@ export default function CheckoutPage() {
     enabled: canQuote,
     staleTime: 5 * 60 * 1000,
   });
+
+  // A cart containing a seller we cannot collect from is not a pricing problem.
+  // Fast Link accepts such an order without complaint and produces a delivery
+  // with no pickup, so this is the last point the customer can be stopped.
+  const undeliverable = flQuote?.deliverable === false;
+  const undeliverableMessage = flQuote?.message ?? null;
 
   // Use the Fast Link fee only when the whole cart was priced; else zone fee.
   const flFee = flQuote?.ok && flQuote.fallback === false ? flQuote.totalFee : null;
@@ -863,6 +854,14 @@ export default function CheckoutPage() {
             </div>
 
             {/* Navigation buttons */}
+            {undeliverable && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <p className="text-xs text-amber-800">
+                  {undeliverableMessage ?? "We cannot arrange delivery for one of the sellers in your cart yet."}
+                </p>
+              </div>
+            )}
             <div className="flex gap-3 mt-3">
               {step > 0 && (
                 <button onClick={back} className="flex-1 py-3 rounded-full border-2 border-gray-200 text-sm font-semibold text-gray-700 hover:border-gray-400 transition-colors">
@@ -876,7 +875,7 @@ export default function CheckoutPage() {
               ) : (
                 <button
                   onClick={handlePlaceOrder}
-                  disabled={loading}
+                  disabled={loading || undeliverable}
                   className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-full bg-linear-to-r from-primary to-primary-dark text-white font-semibold hover:shadow-xl hover:shadow-primary/25 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
                 >
                   {loading ? "Processing..." : `Pay ₦${amountDue.toLocaleString()}`}
